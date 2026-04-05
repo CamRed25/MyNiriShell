@@ -1,0 +1,8 @@
+# Swarm orchestrator artifacts
+plans/
+runs/
+proof/
+.quickfix/
+.context/
+.locks/
+node_modules/
