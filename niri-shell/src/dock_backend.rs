@@ -31,6 +31,8 @@ pub struct DockItem {
     pub is_pinned: bool,
     /// Niri compositor window ID (0 for pinned / unknown).
     pub niri_id: u64,
+    /// Niri compositor workspace ID (0 for pinned / unknown).
+    pub workspace_id: u64,
 }
 
 impl DockItem {
@@ -42,6 +44,7 @@ impl DockItem {
             is_active: false,
             is_pinned: true,
             niri_id: 0,
+            workspace_id: 0,
         }
     }
 
@@ -58,6 +61,7 @@ impl DockItem {
             is_active: true,
             is_pinned: false,
             niri_id,
+            workspace_id: 0,
         }
     }
 }

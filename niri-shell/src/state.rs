@@ -136,5 +136,7 @@ impl Default for ShellState {
 fn window_to_dock_item(w: &Window) -> DockItem {
     let app_id = w.app_id.clone().unwrap_or_default();
     let title = w.title.clone().unwrap_or_else(|| app_id.clone());
-    DockItem::active(app_id.clone(), title, app_id, w.id)
+    let mut item = DockItem::active(app_id.clone(), title, app_id, w.id);
+    item.workspace_id = w.workspace_id.unwrap_or(0);
+    item
 }

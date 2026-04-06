@@ -1,14 +1,48 @@
 # TODO
 
-## Quick Settings (removed — not yet wired up)
+## Quick Settings panel
 
-The quick settings panel (Wi-Fi, Bluetooth, brightness) was removed from the status
-bar because the underlying integrations are not implemented:
+Mockup: `mockup/niri_quick_settings_clean.html`
 
-- **Wi-Fi toggle** — needs NetworkManager D-Bus (`org.freedesktop.NetworkManager`)
-- **Bluetooth toggle** — needs BlueZ D-Bus (`org.bluez`)
-- **Brightness slider** — needs logind/UPower or direct sysfs writes
+Full redesign — layer-shell overlay anchored top-right, matching the mockup layout:
 
-Backend types (`QuickSettings`, `update_quick_settings`) are preserved in
-`panel_backend.rs` so nothing needs to be re-designed when this is picked up again.
-The `build_notifications_popover` pattern can be used as a starting template.
+### Header
+- Avatar initials + username + hostname
+- Lock button → `swaylock` / `hyprlock`
+
+### Connections toggle grid (3-col tiles, accent-coloured when active)
+- **Wi-Fi** — NetworkManager D-Bus (`org.freedesktop.NetworkManager`), show SSID when connected
+- **Ethernet** — NM D-Bus, read-only connected state
+- **VPN** — NM D-Bus active-connection with VPN type
+- **Bluetooth** — BlueZ D-Bus (`org.bluez`)
+- **Night Light** — `wlr-gamma-control` protocol or `gammastep`/`redshift` subprocess
+- **Do Not Disturb** — in-process flag; suppresses notification popups
+- **Keyboard layout** — `xkb-switch` subprocess or libxkbcommon query
+- **Microphone mute** — `pactl set-source-mute @DEFAULT_SOURCE@ toggle`
+- **Power profile** — `powerprofilesctl` (`net.hadess.PowerProfiles` D-Bus), 3 states
+
+### Display & Audio sliders
+- **Brightness** — `/sys/class/backlight/*/brightness` or logind D-Bus
+- **Volume** — `pactl set-sink-volume @DEFAULT_SINK@` (already wired)
+
+### Footer buttons
+- **Settings** → `gtk-launch gnome-control-center`
+- **Displays** → `wdisplays`
+- **Log out** → `niri msg action quit`
+
+---
+
+## Status bar
+
+- [ ] **Calendar popover on clock click** — small month grid, no external deps.
+- [ ] **Workspace app icons** — 16px app icons instead of dots, grouped by `workspace_id`.
+
+## Launcher
+
+- [ ] **Recent files** — read `~/.local/share/recently-used.xbel`, shown when query is empty.
+- [ ] **Clipboard history** — `cc` prefix → `cliphist list`; select → `cliphist decode | wl-copy`.
+
+## Dock
+
+- [ ] **Pinned app unread badges** — poll notification count via D-Bus `org.freedesktop.Notifications`.
+- [ ] **Recently-closed ghost icons** — on `WindowClosed`, show icon at reduced opacity, fade ~800 ms.

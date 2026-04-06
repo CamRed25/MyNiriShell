@@ -6,7 +6,7 @@ use std::{cell::RefCell, rc::Rc};
 use gtk4::{
     glib,
     prelude::*,
-    Application, ApplicationWindow, Box as GtkBox, Button, EventControllerScroll,
+    Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, EventControllerScroll,
     EventControllerScrollFlags, Image, Label, ListBox, ListBoxRow, Orientation, Popover,
     ProgressBar, ScrolledWindow, Separator,
 };
@@ -71,17 +71,14 @@ window {
 .weather-temp { font-size: 11px; color: #c0caf5; }
 .weather-loc  { font-size: 10px; color: #565f89; }
 
-progressbar.cpu-bar,
 progressbar.mem-bar {
     min-width: 32px;
 }
-progressbar.cpu-bar trough,
 progressbar.mem-bar trough {
     min-height: 6px;
     border-radius: 3px;
     background: rgba(255, 255, 255, 0.10);
 }
-progressbar.cpu-bar progress { background: #e0af68; border-radius: 3px; }
 progressbar.mem-bar progress { background: #bb9af7; border-radius: 3px; }
 
 .icon-btn {
@@ -138,6 +135,7 @@ fn load_css() {
 }
 
 fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
+    let cpu_history: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::with_capacity(20)));
     let window = ApplicationWindow::builder()
         .application(app)
         .title("niri-panel")
@@ -315,15 +313,43 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     cpu_pill.add_css_class("sb-pill");
     let cpu_tag = Label::new(Some("CPU"));
     cpu_tag.add_css_class("pill-label");
-    let cpu_bar = ProgressBar::new();
-    cpu_bar.add_css_class("cpu-bar");
-    cpu_bar.set_show_text(false);
-    cpu_bar.set_size_request(32, 6);
-    cpu_bar.set_valign(gtk4::Align::Center);
+    let cpu_draw = DrawingArea::new();
+    cpu_draw.set_size_request(44, 14);
+    cpu_draw.set_valign(gtk4::Align::Center);
+    {
+        let hist = Rc::clone(&cpu_history);
+        cpu_draw.set_draw_func(move |_area, cr, w, h| {
+            let buf = hist.borrow();
+            let n = buf.len();
+            if n < 2 {
+                return;
+            }
+            let wf = w as f64;
+            let hf = h as f64;
+            let step = wf / (n as f64 - 1.0);
+            // Fill under the curve.
+            cr.set_source_rgba(0.878, 0.686, 0.408, 0.15);
+            cr.move_to(0.0, hf);
+            for (i, &v) in buf.iter().enumerate() {
+                cr.line_to(i as f64 * step, hf - (v / 100.0) as f64 * hf);
+            }
+            cr.line_to((n - 1) as f64 * step, hf);
+            cr.close_path();
+            let _ = cr.fill();
+            // Draw the line.
+            cr.set_source_rgba(0.878, 0.686, 0.408, 0.9);
+            cr.set_line_width(1.2);
+            cr.move_to(0.0, hf - (buf[0] / 100.0) as f64 * hf);
+            for (i, &v) in buf.iter().enumerate().skip(1) {
+                cr.line_to(i as f64 * step, hf - (v / 100.0) as f64 * hf);
+            }
+            let _ = cr.stroke();
+        });
+    }
     let cpu_pct_lbl = Label::new(Some("0%"));
     cpu_pct_lbl.add_css_class("cpu-pct");
     cpu_pill.append(&cpu_tag);
-    cpu_pill.append(&cpu_bar);
+    cpu_pill.append(&cpu_draw);
     cpu_pill.append(&cpu_pct_lbl);
     right.append(&cpu_pill);
 
@@ -384,7 +410,8 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     let date_lbl_c = date_label.clone();
     let net_up_c = net_up_val.clone();
     let net_dn_c = net_dn_val.clone();
-    let cpu_bar_c = cpu_bar.clone();
+    let cpu_draw_c = cpu_draw.clone();
+    let cpu_hist_c = Rc::clone(&cpu_history);
     let cpu_pct_c = cpu_pct_lbl.clone();
     let mem_bar_c = mem_bar.clone();
     let mem_pct_c = mem_pct_lbl.clone();
@@ -422,15 +449,22 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
 
         // Pull live system stats and write them into shared state.
         if let Some(snap) = crate::sysinfo::sample() {
-            let mut s = state_c.borrow_mut();
-            let _ = s.update_stats(
-                snap.cpu_percent,
-                snap.memory_used,
-                snap.memory_total,
-                snap.net_up,
-                snap.net_down,
-                snap.volume,
-            );
+            {
+                let mut s = state_c.borrow_mut();
+                let _ = s.update_stats(
+                    snap.cpu_percent,
+                    snap.memory_used,
+                    snap.memory_total,
+                    snap.net_up,
+                    snap.net_down,
+                    snap.volume,
+                );
+            }
+            let mut hist = cpu_hist_c.borrow_mut();
+            hist.push(snap.cpu_percent);
+            if hist.len() > 20 {
+                hist.remove(0);
+            }
         }
 
         // Pull MPRIS media (non-blocking D-Bus poll).
@@ -461,8 +495,8 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
         net_up_c.set_text(&fmt_speed(s.stats.network_up));
         net_dn_c.set_text(&fmt_speed(s.stats.network_down));
 
-        // CPU
-        cpu_bar_c.set_fraction((s.stats.cpu_percent / 100.0).clamp(0.0, 1.0) as f64);
+        // CPU sparkline
+        cpu_draw_c.queue_draw();
         cpu_pct_c.set_text(&format!("{:.0}%", s.stats.cpu_percent));
 
         // MEM

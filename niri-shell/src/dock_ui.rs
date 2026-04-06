@@ -75,6 +75,13 @@ window {
     min-height: 32px;
     margin: 0 4px;
 }
+
+.dock-ws-label {
+    font-size: 8px;
+    color: #565f89;
+    padding: 0 2px;
+    margin-bottom: 1px;
+}
 ";
 
 /// Called once inside `app.connect_activate`. Loads CSS and builds the dock window.
@@ -163,7 +170,7 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
 fn active_section_key(items: &[crate::dock_backend::DockItem]) -> String {
     items
         .iter()
-        .map(|i| format!("{}:{}", i.id, i.is_active as u8))
+        .map(|i| format!("{}:{}:{}", i.id, i.is_active as u8, i.workspace_id))
         .collect::<Vec<_>>()
         .join("|")
 }
@@ -195,8 +202,39 @@ fn refresh_active_section(section: &GtkBox, state: &Rc<RefCell<DockState>>) {
     while let Some(child) = section.first_child() {
         section.remove(&child);
     }
-    for item in &items {
-        section.append(&build_dock_item(item, None, Rc::clone(state)));
+
+    // Group by workspace_id preserving insertion order.
+    let mut seen: Vec<u64> = Vec::new();
+    let mut groups: Vec<(u64, Vec<DockItem>)> = Vec::new();
+    for item in items {
+        let wid = item.workspace_id;
+        if let Some(pos) = seen.iter().position(|&w| w == wid) {
+            groups[pos].1.push(item);
+        } else {
+            seen.push(wid);
+            groups.push((wid, vec![item]));
+        }
+    }
+
+    let show_labels = groups.len() > 1;
+    for (ws_id, group_items) in &groups {
+        if show_labels {
+            let col = GtkBox::new(Orientation::Vertical, 1);
+            let lbl = Label::new(Some(&format!("ws {ws_id}")));
+            lbl.add_css_class("dock-ws-label");
+            lbl.set_halign(gtk4::Align::Center);
+            col.append(&lbl);
+            let row_box = GtkBox::new(Orientation::Horizontal, 4);
+            for item in group_items {
+                row_box.append(&build_dock_item(item, None, Rc::clone(state)));
+            }
+            col.append(&row_box);
+            section.append(&col);
+        } else {
+            for item in group_items {
+                section.append(&build_dock_item(item, None, Rc::clone(state)));
+            }
+        }
     }
     section.set_widget_name(&key);
 }

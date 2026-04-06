@@ -80,6 +80,8 @@ entry placeholder { color: #565f89; }
     padding: 2px 6px;
 }
 
+.run-icon { color: #9ece6a; font-size: 13px; margin-right: 2px; }
+
 .section-label {
     font-size: 10px;
     color: #565f89;
@@ -146,6 +148,7 @@ struct LauncherState {
     results: Vec<SearchResult>,
     selected: usize,
     calc: Option<CalcResult>,
+    run_cmd: Option<String>,
 }
 
 /// Called once inside `app.connect_activate`. Loads CSS and builds the launcher window.
@@ -174,6 +177,7 @@ fn build_window(app: &Application) {
         results: initial_results,
         selected: 0,
         calc: None,
+        run_cmd: None,
     }));
 
     let window = ApplicationWindow::builder()
@@ -289,6 +293,25 @@ fn build_window(app: &Application) {
         entry.connect_changed(move |e| {
             let text = e.text().to_string();
 
+            // `>` prefix → run-command mode.
+            if text.starts_with('>') {
+                let cmd = text[1..].trim().to_owned();
+                {
+                    let mut st = state.borrow_mut();
+                    st.results = Vec::new();
+                    st.selected = 0;
+                    st.calc = None;
+                    st.run_cmd = if cmd.is_empty() { None } else { Some(cmd.clone()) };
+                }
+                calc_badge.set_visible(false);
+                calc_section.set_visible(false);
+                update_run_list(&list_box, if cmd.is_empty() { None } else { Some(&cmd) });
+                return;
+            }
+
+            // Normal mode — clear any leftover run_cmd.
+            state.borrow_mut().run_cmd = None;
+
             let calc = if !text.trim().is_empty() {
                 let r = evaluate_expression(&text);
                 if !r.is_error { Some(r) } else { None }
@@ -326,14 +349,25 @@ fn build_window(app: &Application) {
         });
     }
 
-    // Click a row → launch that app
+    // Click a row → launch that app (or run command in run mode)
     {
         let state = Rc::clone(&state);
         let window_weak = window.downgrade();
         list_box.connect_row_activated(move |_lb, row| {
             let idx = row.index() as usize;
-            let entry = state.borrow().results.get(idx).map(|r| r.entry.clone());
-            if let Some(entry) = entry {
+            let (app_entry, run_cmd) = {
+                let st = state.borrow();
+                let run = st.run_cmd.clone();
+                let app =
+                    if run.is_none() { st.results.get(idx).map(|r| r.entry.clone()) } else { None };
+                (app, run)
+            };
+            if let Some(cmd) = run_cmd {
+                spawn_command(&cmd);
+                if let Some(w) = window_weak.upgrade() {
+                    w.set_visible(false);
+                }
+            } else if let Some(entry) = app_entry {
                 match launch_app(&entry) {
                     Ok(()) => {
                         log::info!("Launched: {}", entry.name);
@@ -354,13 +388,19 @@ fn build_window(app: &Application) {
         let state = Rc::clone(&state);
         let window_weak = window.downgrade();
         entry.connect_activate(move |_e| {
-            let (app_entry, calc_text) = {
+            let (app_entry, calc_text, run_cmd) = {
                 let st = state.borrow();
                 let app = st.results.get(st.selected).map(|r| r.entry.clone());
                 let calc = st.calc.as_ref().map(|c| c.result.clone());
-                (app, calc)
+                let run = st.run_cmd.clone();
+                (app, calc, run)
             };
-            if let Some(entry) = app_entry {
+            if let Some(cmd) = run_cmd {
+                spawn_command(&cmd);
+                if let Some(w) = window_weak.upgrade() {
+                    w.set_visible(false);
+                }
+            } else if let Some(entry) = app_entry {
                 match launch_app(&entry) {
                     Ok(()) => {
                         log::info!("Launched: {}", entry.name);
@@ -423,14 +463,20 @@ fn build_window(app: &Application) {
                     glib::Propagation::Stop
                 }
                 gdk::Key::Return | gdk::Key::KP_Enter => {
-                    let (app_entry, calc_text) = {
+                    let (app_entry, calc_text, run_cmd) = {
                         let st = state.borrow();
                         let app = st.results.get(st.selected).map(|r| r.entry.clone());
                         let calc = st.calc.as_ref().map(|c| c.result.clone());
-                        (app, calc)
+                        let run = st.run_cmd.clone();
+                        (app, calc, run)
                     };
 
-                    if let Some(entry) = app_entry {
+                    if let Some(cmd) = run_cmd {
+                        spawn_command(&cmd);
+                        if let Some(w) = window_weak.upgrade() {
+                            w.set_visible(false);
+                        }
+                    } else if let Some(entry) = app_entry {
                         match launch_app(&entry) {
                             Ok(()) => {
                                 log::info!("Launched: {}", entry.name);
@@ -483,6 +529,7 @@ fn build_window(app: &Application) {
                     st.apps = crate::launcher_backend::load_apps();
                     st.selected = 0;
                     st.calc = None;
+                    st.run_cmd = None;
                     st.results = crate::launcher_backend::fuzzy_search("", &st.apps);
                 }
                 if let Some(e) = entry_weak.upgrade() {
@@ -546,6 +593,34 @@ fn update_results_list(list_box: &ListBox, results: &[SearchResult], selected: u
         let row = build_result_row(result, i == selected);
         list_box.append(&row);
     }
+}
+
+fn update_run_list(list_box: &ListBox, cmd: Option<&str>) {
+    while let Some(child) = list_box.first_child() {
+        list_box.remove(&child);
+    }
+    let Some(cmd) = cmd else { return };
+    let item = GtkBox::new(Orientation::Horizontal, 8);
+    item.add_css_class("result-item");
+    item.add_css_class("selected");
+    let icon = Label::new(Some("▶"));
+    icon.add_css_class("run-icon");
+    let name = Label::new(Some(&format!("run  {cmd}")));
+    name.add_css_class("result-name");
+    item.append(&icon);
+    item.append(&name);
+    let row = ListBoxRow::builder().selectable(false).activatable(true).build();
+    row.set_child(Some(&item));
+    list_box.append(&row);
+}
+
+fn spawn_command(cmd: &str) {
+    let cmd = cmd.to_owned();
+    std::thread::spawn(move || {
+        if let Err(e) = std::process::Command::new("sh").args(["-c", &cmd]).spawn() {
+            log::error!("run command failed: {e}");
+        }
+    });
 }
 
 fn build_result_row(result: &SearchResult, selected: bool) -> ListBoxRow {
