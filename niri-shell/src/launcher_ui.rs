@@ -1,21 +1,33 @@
 // GTK4 UI for niri-launcher.
 // Zero backend logic — all business logic lives in launcher_backend.rs.
 
+use gtk4::gdk;
+use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    gdk, glib, Application, ApplicationWindow, Box as GtkBox, CssProvider,
-    Entry, EventControllerKey, Image, Label, ListBox, ListBoxRow, Orientation, Separator,
+    Application, ApplicationWindow, Box as GtkBox, CssProvider, Entry,
+    EventControllerKey, Image, Label, ListBox, ListBoxRow, Orientation, Separator,
 };
+use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use crate::launcher_backend::{
     evaluate_expression, fuzzy_search, launch_app, load_apps, CalcResult, SearchResult,
 };
 
-const APP_ID: &str = "io.github.niri.launcher";
 const WINDOW_WIDTH: i32 = 360;
 const MAX_RESULTS: usize = 8;
+
+/// Set by the SIGUSR1 handler; polled by the GTK main-thread timer.
+static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// POSIX signal handler — only async-signal-safe operations allowed.
+extern "C" fn sigusr1_handler(_: libc::c_int) {
+    TOGGLE_REQUESTED.store(true, Ordering::Relaxed);
+}
 
 const CSS: &str = r#"
 * { box-shadow: none; }
@@ -122,15 +134,12 @@ separator.divider {
     font-weight: 500;
 }
 
-/* High-contrast overrides */
 .high-contrast .result-name { color: #ffffff; }
 .high-contrast .result-sub { color: #aaaaaa; }
 .high-contrast .section-label { color: #bbbbbb; }
 .high-contrast .result-item.selected { background: rgba(122, 162, 247, 0.35); }
 .high-contrast entry > text { color: #ffffff; }
 "#;
-
-// ── Shared state ──────────────────────────────────────────────────────────────
 
 struct LauncherState {
     apps: Vec<crate::launcher_backend::AppEntry>,
@@ -139,17 +148,10 @@ struct LauncherState {
     calc: Option<CalcResult>,
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
-
-pub fn run() {
-    env_logger::init();
-
-    let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(build_window);
-    app.run();
+/// Called once inside `app.connect_activate`. Loads CSS and builds the launcher window.
+pub fn build_launcher_window(app: &Application) {
+    build_window(app);
 }
-
-// ── Window construction ───────────────────────────────────────────────────────
 
 fn build_window(app: &Application) {
     let provider = CssProvider::new();
@@ -182,7 +184,13 @@ fn build_window(app: &Application) {
         .decorated(false)
         .build();
 
-    // Root container with padding
+    // Place at screen centre using layer-shell overlay layer.
+    // Keyboard mode: on-demand so it receives focus when shown.
+    window.init_layer_shell();
+    window.set_layer(Layer::Overlay);
+    window.set_keyboard_mode(KeyboardMode::OnDemand);
+    // No edge anchoring → centred on screen.
+
     let root = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
@@ -198,11 +206,9 @@ fn build_window(app: &Application) {
         root.add_css_class("high-contrast");
     }
 
-    // ── Search row ───────────────────────────────────────────────────────────
     let (search_row, entry, calc_badge) = build_search_row();
     root.append(&search_row);
 
-    // ── Apps section ─────────────────────────────────────────────────────────
     let apps_section = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
@@ -221,18 +227,14 @@ fn build_window(app: &Application) {
         .selection_mode(gtk4::SelectionMode::None)
         .accessible_role(gtk4::AccessibleRole::List)
         .build();
-    list_box.set_activate_on_single_click(false);
+    list_box.set_activate_on_single_click(true);
     apps_section.append(&list_box);
     root.append(&apps_section);
 
-    // ── Divider ──────────────────────────────────────────────────────────────
-    let divider = Separator::builder()
-        .orientation(Orientation::Horizontal)
-        .build();
+    let divider = Separator::builder().orientation(Orientation::Horizontal).build();
     divider.add_css_class("divider");
     root.append(&divider);
 
-    // ── Calculator section ───────────────────────────────────────────────────
     let calc_section = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
@@ -240,17 +242,11 @@ fn build_window(app: &Application) {
         .accessible_role(gtk4::AccessibleRole::Group)
         .build();
 
-    let calc_label = Label::builder()
-        .label("calculator")
-        .halign(gtk4::Align::Start)
-        .build();
+    let calc_label = Label::builder().label("calculator").halign(gtk4::Align::Start).build();
     calc_label.add_css_class("section-label");
     calc_section.append(&calc_label);
 
-    let calc_area = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(8)
-        .build();
+    let calc_area = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).build();
     calc_area.add_css_class("calc-area");
 
     let calc_expr_label = Label::builder()
@@ -276,13 +272,12 @@ fn build_window(app: &Application) {
 
     window.set_child(Some(&root));
 
-    // ── Initial render ───────────────────────────────────────────────────────
     {
         let st = state.borrow();
         update_results_list(&list_box, &st.results, st.selected);
     }
 
-    // ── Entry changed → live search + calc ───────────────────────────────────
+    // Entry changed → live search + calc
     {
         let state = Rc::clone(&state);
         let list_box = list_box.clone();
@@ -331,7 +326,61 @@ fn build_window(app: &Application) {
         });
     }
 
-    // ── Keyboard navigation ───────────────────────────────────────────────────
+    // Click a row → launch that app
+    {
+        let state = Rc::clone(&state);
+        let window_weak = window.downgrade();
+        list_box.connect_row_activated(move |_lb, row| {
+            let idx = row.index() as usize;
+            let entry = state.borrow().results.get(idx).map(|r| r.entry.clone());
+            if let Some(entry) = entry {
+                match launch_app(&entry) {
+                    Ok(()) => {
+                        log::info!("Launched: {}", entry.name);
+                        if let Some(w) = window_weak.upgrade() {
+                            w.set_visible(false);
+                        }
+                    }
+                    Err(e) => log::error!("Launch failed: {e}"),
+                }
+            }
+        });
+    }
+
+    // Keyboard navigation
+    // NOTE: Entry consumes Return itself and fires `activate` — the window
+    // EventControllerKey never sees it. Wire entry.connect_activate for Enter.
+    {
+        let state = Rc::clone(&state);
+        let window_weak = window.downgrade();
+        entry.connect_activate(move |_e| {
+            let (app_entry, calc_text) = {
+                let st = state.borrow();
+                let app = st.results.get(st.selected).map(|r| r.entry.clone());
+                let calc = st.calc.as_ref().map(|c| c.result.clone());
+                (app, calc)
+            };
+            if let Some(entry) = app_entry {
+                match launch_app(&entry) {
+                    Ok(()) => {
+                        log::info!("Launched: {}", entry.name);
+                        if let Some(w) = window_weak.upgrade() {
+                            w.set_visible(false);
+                        }
+                    }
+                    Err(e) => log::error!("Launch failed: {e}"),
+                }
+            } else if let Some(result_text) = calc_text {
+                if let Some(display) = gdk::Display::default() {
+                    display.clipboard().set_text(&result_text);
+                    log::info!("Copied calc result to clipboard: {result_text}");
+                }
+                if let Some(w) = window_weak.upgrade() {
+                    w.set_visible(false);
+                }
+            }
+        });
+    }
     {
         let state = Rc::clone(&state);
         let list_box = list_box.clone();
@@ -342,7 +391,7 @@ fn build_window(app: &Application) {
             match keyval {
                 gdk::Key::Escape => {
                     if let Some(w) = window_weak.upgrade() {
-                        w.close();
+                        w.set_visible(false);
                     }
                     glib::Propagation::Stop
                 }
@@ -386,7 +435,7 @@ fn build_window(app: &Application) {
                             Ok(()) => {
                                 log::info!("Launched: {}", entry.name);
                                 if let Some(w) = window_weak.upgrade() {
-                                    w.close();
+                                    w.set_visible(false);
                                 }
                             }
                             Err(e) => log::error!("Launch failed: {e}"),
@@ -397,7 +446,7 @@ fn build_window(app: &Application) {
                             log::info!("Copied calc result to clipboard: {result_text}");
                         }
                         if let Some(w) = window_weak.upgrade() {
-                            w.close();
+                            w.set_visible(false);
                         }
                     }
                     glib::Propagation::Stop
@@ -408,11 +457,49 @@ fn build_window(app: &Application) {
         window.add_controller(key_ctrl);
     }
 
-    window.present();
-    entry.grab_focus();
-}
+    // Start hidden — SIGUSR1 toggles the launcher.
+    // Niri config example: `bind "Super+Space" { spawn ["sh" "-c" "kill -USR1 $(pgrep niri-shell)"]; }`
+    unsafe { libc::signal(libc::SIGUSR1, sigusr1_handler as *const () as libc::sighandler_t) };
 
-// ── Search row builder ────────────────────────────────────────────────────────
+    {
+        let window_weak = window.downgrade();
+        let entry_weak = entry.downgrade();
+        let list_weak = list_box.downgrade();
+        let state_sig = Rc::clone(&state);
+
+        glib::timeout_add_local(Duration::from_millis(150), move || {
+            if !TOGGLE_REQUESTED.swap(false, Ordering::Relaxed) {
+                return glib::ControlFlow::Continue;
+            }
+            let Some(w) = window_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if w.is_visible() {
+                w.set_visible(false);
+            } else {
+                // Reset search before presenting.
+                {
+                    let mut st = state_sig.borrow_mut();
+                    st.selected = 0;
+                    st.calc = None;
+                    st.results = crate::launcher_backend::fuzzy_search("", &st.apps);
+                }
+                if let Some(e) = entry_weak.upgrade() {
+                    e.set_text("");
+                }
+                if let Some(list) = list_weak.upgrade() {
+                    let st = state_sig.borrow();
+                    update_results_list(&list, &st.results, st.selected);
+                }
+                w.present();
+                if let Some(e) = entry_weak.upgrade() {
+                    e.grab_focus();
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+}
 
 fn build_search_row() -> (GtkBox, Entry, Label) {
     let row = GtkBox::builder()
@@ -449,8 +536,6 @@ fn build_search_row() -> (GtkBox, Entry, Label) {
     (row, entry, calc_badge)
 }
 
-// ── Results list update ───────────────────────────────────────────────────────
-
 fn update_results_list(list_box: &ListBox, results: &[SearchResult], selected: usize) {
     while let Some(child) = list_box.first_child() {
         list_box.remove(&child);
@@ -465,22 +550,17 @@ fn update_results_list(list_box: &ListBox, results: &[SearchResult], selected: u
 fn build_result_row(result: &SearchResult, selected: bool) -> ListBoxRow {
     let row = ListBoxRow::builder()
         .selectable(false)
-        .activatable(false)
+        .activatable(true)
         .accessible_role(gtk4::AccessibleRole::ListItem)
         .build();
-    // Use the .desktop file stem as widget name for accessibility / debugging.
     row.set_widget_name(&result.entry.id);
 
-    let item = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(10)
-        .build();
+    let item = GtkBox::builder().orientation(Orientation::Horizontal).spacing(10).build();
     item.add_css_class("result-item");
     if selected {
         item.add_css_class("selected");
     }
 
-    // App icon
     let icon_name = if result.entry.icon.is_empty() {
         "application-x-executable-symbolic"
     } else {
@@ -497,7 +577,6 @@ fn build_result_row(result: &SearchResult, selected: bool) -> ListBoxRow {
         .build();
     item.append(&icon);
 
-    // Name + description column
     let text_col = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
@@ -530,29 +609,43 @@ fn build_result_row(result: &SearchResult, selected: bool) -> ListBoxRow {
     row
 }
 
-// ── Markup helpers ────────────────────────────────────────────────────────────
-
-/// Build Pango markup for `name`, wrapping byte ranges in a highlight span.
 fn build_match_markup(name: &str, ranges: &[(usize, usize)]) -> String {
     if ranges.is_empty() {
         return escape_markup(name);
     }
 
-    let mut out = String::with_capacity(name.len() + ranges.len() * 32);
+    let len = name.len();
+    let mut out = String::with_capacity(len + ranges.len() * 32);
     let mut last = 0usize;
 
-    for &(start, end) in ranges {
+    for &(raw_start, raw_end) in ranges {
+        // Clamp + ensure valid char boundaries to prevent any panic.
+        let start = raw_start.min(len);
+        let end = raw_end.min(len);
+        if start >= end {
+            continue;
+        }
+        // Walk start/end back to a valid UTF-8 char boundary.
+        let start = (0..=start).rev().find(|&i| name.is_char_boundary(i)).unwrap_or(0);
+        let end = (end..=len).find(|&i| name.is_char_boundary(i)).unwrap_or(len);
+
         if start > last {
-            out.push_str(&escape_markup(&name[last..start]));
+            if let Some(s) = name.get(last..start) {
+                out.push_str(&escape_markup(s));
+            }
         }
         out.push_str("<span color=\"#7aa2f7\">");
-        out.push_str(&escape_markup(&name[start..end]));
+        if let Some(s) = name.get(start..end) {
+            out.push_str(&escape_markup(s));
+        }
         out.push_str("</span>");
         last = end;
     }
 
-    if last < name.len() {
-        out.push_str(&escape_markup(&name[last..]));
+    if last < len {
+        if let Some(s) = name.get(last..) {
+            out.push_str(&escape_markup(s));
+        }
     }
 
     out
@@ -572,8 +665,6 @@ fn escape_markup(s: &str) -> String {
     }
     out
 }
-
-// ── Utility ───────────────────────────────────────────────────────────────────
 
 fn is_high_contrast() -> bool {
     gtk4::Settings::default()

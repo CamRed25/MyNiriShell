@@ -1,4 +1,4 @@
-// dock_ui.rs — GTK4 dock user interface.
+// GTK4 dock user interface.
 // UI-only: no business logic — all state and logic lives in dock_backend.
 
 use std::cell::RefCell;
@@ -8,14 +8,12 @@ use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Image, Label, Orientation,
-    Overlay, Separator,
+    Application, ApplicationWindow, Box as GtkBox, Button, Image, Label, Orientation, Overlay,
+    Separator,
 };
-use thiserror::Error;
+use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
 use crate::dock_backend::{DockItem, DockState};
-
-const APP_ID: &str = "com.niri.dock";
 
 const CSS: &str = "
 window {
@@ -52,8 +50,6 @@ window {
     border-radius: 50%;
     min-width: 4px;
     min-height: 4px;
-    max-width: 4px;
-    max-height: 4px;
 }
 
 .dock-dot-empty {
@@ -61,8 +57,6 @@ window {
     border-radius: 50%;
     min-width: 4px;
     min-height: 4px;
-    max-width: 4px;
-    max-height: 4px;
 }
 
 .dock-badge {
@@ -83,45 +77,24 @@ window {
 }
 ";
 
-#[derive(Debug, Error)]
-pub enum DockUiError {
-    #[error("GTK failed to initialize")]
-    GtkInit,
-}
-
-pub fn run() -> Result<(), DockUiError> {
-    gtk4::init().map_err(|_| DockUiError::GtkInit)?;
-
-    let app = Application::builder().application_id(APP_ID).build();
-
-    app.connect_activate(|app| {
-        let state = Rc::new(RefCell::new(DockState::new()));
-
-        // Populate active windows; in production these come via compositor IPC.
-        state.borrow_mut().set_active_windows(vec![
-            DockItem::active("firefox", "Firefox", "firefox"),
-            DockItem::active("org.gnome.Terminal", "Terminal", "org.gnome.Terminal"),
-            DockItem::active("code", "VS Code", "com.visualstudio.code"),
-        ]);
-
-        load_css();
-        build_window(app, state);
-    });
-
-    app.run();
-    Ok(())
+/// Called once inside `app.connect_activate`. Loads CSS and builds the dock window.
+pub fn build_dock_window(app: &Application, state: Rc<RefCell<DockState>>) {
+    load_css();
+    build_window(app, state);
 }
 
 fn load_css() {
-    let provider = CssProvider::new();
+    let Some(display) = gdk::Display::default() else {
+        log::warn!("dock_ui: no GDK display, skipping CSS load");
+        return;
+    };
+    let provider = gtk4::CssProvider::new();
     provider.load_from_string(CSS);
-    if let Some(display) = gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+    gtk4::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }
 
 fn build_window(app: &Application, state: Rc<RefCell<DockState>>) {
@@ -131,6 +104,15 @@ fn build_window(app: &Application, state: Rc<RefCell<DockState>>) {
         .decorated(false)
         .resizable(false)
         .build();
+
+    // Pin to the bottom edge, centred, above all windows.
+    window.init_layer_shell();
+    window.set_layer(Layer::Top);
+    window.auto_exclusive_zone_enable();
+    window.set_anchor(Edge::Bottom, true);
+    window.set_anchor(Edge::Left, false);
+    window.set_anchor(Edge::Right, false);
+    window.set_anchor(Edge::Top, false);
 
     let dock = build_dock(state);
     window.set_child(Some(&dock));
@@ -142,14 +124,9 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
     bar.add_css_class("dock-bar");
     bar.set_valign(gtk4::Align::Center);
 
-    // Left section: active workspace apps in open order.
+    // Left section: active workspace apps — rebuilt every 500 ms from state.
     let active_section = GtkBox::new(Orientation::Horizontal, 4);
-    {
-        let s = state.borrow();
-        for item in &s.active {
-            active_section.append(&build_dock_item(item, None, state.clone()));
-        }
-    }
+    refresh_active_section(&active_section, &state);
     bar.append(&active_section);
 
     // Separator between sections.
@@ -159,13 +136,97 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
 
     // Right section: pinned apps with drag-and-drop reordering.
     let pinned_section = GtkBox::new(Orientation::Horizontal, 4);
-    populate_pinned_section(&pinned_section, state);
+    populate_pinned_section(&pinned_section, Rc::clone(&state));
     bar.append(&pinned_section);
+
+    // Poll every 500 ms to reflect open-window and focus changes.
+    let active_weak = active_section.downgrade();
+    let pinned_weak = pinned_section.downgrade();
+    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+        let (Some(active), Some(pinned)) = (active_weak.upgrade(), pinned_weak.upgrade()) else {
+            return glib::ControlFlow::Break;
+        };
+        refresh_active_section(&active, &state);
+        refresh_pinned_section(&pinned, &state);
+        glib::ControlFlow::Continue
+    });
 
     bar
 }
 
-/// Clears and repopulates the pinned section.  Called on initial build and after D&D reorder.
+/// Encodes the full visible state of the active section as a string key.
+fn active_section_key(items: &[crate::dock_backend::DockItem]) -> String {
+    items
+        .iter()
+        .map(|i| format!("{}:{}", i.id, i.is_active as u8))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Encodes pinned-section running/focused state as a string key.
+fn pinned_section_key(state: &Rc<RefCell<DockState>>) -> String {
+    let dock = state.borrow();
+    let focused = dock.active.iter().find(|a| a.is_active).map(|a| a.id.clone());
+    let active_ids: std::collections::HashSet<&str> =
+        dock.active.iter().map(|a| a.id.as_str()).collect();
+    dock.pinned
+        .iter()
+        .map(|p| {
+            let running = active_ids.contains(p.id.as_str());
+            let focused = focused.as_deref() == Some(p.id.as_str());
+            format!("{}:{}:{}", p.id, running as u8, focused as u8)
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn refresh_active_section(section: &GtkBox, state: &Rc<RefCell<DockState>>) {
+    let items = state.borrow().active.clone();
+    let key = active_section_key(&items);
+    // Widget name stores the last-rendered key; skip rebuild when unchanged.
+    if section.widget_name().as_str() == key {
+        return;
+    }
+    while let Some(child) = section.first_child() {
+        section.remove(&child);
+    }
+    for item in &items {
+        section.append(&build_dock_item(item, None, Rc::clone(state)));
+    }
+    section.set_widget_name(&key);
+}
+
+fn refresh_pinned_section(section: &GtkBox, state: &Rc<RefCell<DockState>>) {
+    let key = pinned_section_key(state);
+    if section.widget_name().as_str() == key {
+        return;
+    }
+    populate_pinned_section(section, Rc::clone(state));
+    section.set_widget_name(&key);
+}
+
+/// Resolve an icon name against the current GTK icon theme, falling back to a generic icon.
+fn resolve_icon(name: &str) -> String {
+    if name.is_empty() {
+        return "application-x-executable".to_owned();
+    }
+    if let Some(display) = gdk::Display::default() {
+        let theme = gtk4::IconTheme::for_display(&display);
+        if theme.has_icon(name) {
+            return name.to_owned();
+        }
+        let lower = name.to_lowercase();
+        if theme.has_icon(&lower) {
+            return lower;
+        }
+        let sym = format!("{lower}-symbolic");
+        if theme.has_icon(&sym) {
+            return sym;
+        }
+    }
+    "application-x-executable".to_owned()
+}
+
 fn populate_pinned_section(section: &GtkBox, state: Rc<RefCell<DockState>>) {
     while let Some(child) = section.first_child() {
         section.remove(&child);
@@ -174,7 +235,6 @@ fn populate_pinned_section(section: &GtkBox, state: Rc<RefCell<DockState>>) {
     let items: Vec<DockItem> = state.borrow().pinned.clone();
 
     for (idx, item) in items.iter().enumerate() {
-        // Reflect running state: highlight dot when pinned app is currently active.
         let running = state.borrow().active.iter().any(|a| a.id == item.id);
         let mut display_item = item.clone();
         display_item.is_active = running;
@@ -217,7 +277,6 @@ fn populate_pinned_section(section: &GtkBox, state: Rc<RefCell<DockState>>) {
     }
 }
 
-/// Builds a single dock item: [overlay(icon button + optional badge), indicator dot].
 fn build_dock_item(
     item: &DockItem,
     badge_count: Option<u32>,
@@ -230,7 +289,7 @@ fn build_dock_item(
 
     let btn = Button::new();
     btn.add_css_class("dock-icon-btn");
-    let icon = Image::from_icon_name(&item.icon);
+    let icon = Image::from_icon_name(&resolve_icon(&item.icon));
     icon.set_pixel_size(22);
     btn.set_child(Some(&icon));
     btn.set_tooltip_text(Some(&item.name));
@@ -257,7 +316,6 @@ fn build_dock_item(
 
     item_box.append(&overlay);
 
-    // Indicator dot: filled (#7aa2f7) when active, transparent when idle.
     let dot = GtkBox::new(Orientation::Horizontal, 0);
     dot.set_halign(gtk4::Align::Center);
     dot.set_size_request(4, 4);

@@ -21,11 +21,14 @@ pub enum DockError {
 
 #[derive(Debug, Clone)]
 pub struct DockItem {
+    /// App identity used for pinned-vs-active matching and gtk-launch.
     pub id: String,
     pub name: String,
     pub icon: String,
     pub is_active: bool,
     pub is_pinned: bool,
+    /// Niri compositor window ID (0 for pinned / unknown).
+    pub niri_id: u64,
 }
 
 impl DockItem {
@@ -36,16 +39,23 @@ impl DockItem {
             icon: icon.into(),
             is_active: false,
             is_pinned: true,
+            niri_id: 0,
         }
     }
 
-    pub fn active(id: impl Into<String>, name: impl Into<String>, icon: impl Into<String>) -> Self {
+    pub fn active(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        icon: impl Into<String>,
+        niri_id: u64,
+    ) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
             icon: icon.into(),
             is_active: true,
             is_pinned: false,
+            niri_id,
         }
     }
 }
@@ -133,7 +143,7 @@ mod tests {
     #[test]
     fn set_active_windows_replaces_list() {
         let mut state = DockState::new();
-        let windows = vec![DockItem::active("foo", "Foo", "foo-icon")];
+        let windows = vec![DockItem::active("foo", "Foo", "foo-icon", 99)];
         state.set_active_windows(windows);
         assert_eq!(state.active.len(), 1);
         assert_eq!(state.active[0].id, "foo");

@@ -245,42 +245,46 @@ fn fuzzy_match(query: &str, target: &str) -> Option<(f32, Vec<(usize, usize)>)> 
     let coverage = query_chars.len() as f32 / target_chars.len() as f32;
     let score = coverage + consecutive_bonus + start_bonus;
 
-    // Convert char positions to byte ranges, then merge consecutive spans.
+    // Convert char positions to correct byte ranges (start..end inclusive of the
+    // full character width), then merge adjacent spans.
     let char_byte_offsets: Vec<usize> = target
         .char_indices()
         .map(|(byte_pos, _)| byte_pos)
         .collect();
     let byte_len = target.len();
 
-    let byte_positions: Vec<usize> = match_positions
+    // Each entry is (start_byte, end_byte) for the matched character.
+    let byte_ranges: Vec<(usize, usize)> = match_positions
         .iter()
-        .map(|&ci| char_byte_offsets.get(ci).copied().unwrap_or(byte_len))
+        .map(|&ci| {
+            let start = char_byte_offsets.get(ci).copied().unwrap_or(byte_len);
+            // end = start of the NEXT char (or end of string for the last char).
+            let end = char_byte_offsets.get(ci + 1).copied().unwrap_or(byte_len);
+            (start, end)
+        })
         .collect();
 
-    let ranges = merge_positions_to_ranges(&byte_positions);
+    let ranges = merge_byte_ranges(&byte_ranges);
     Some((score, ranges))
 }
 
-fn merge_positions_to_ranges(positions: &[usize]) -> Vec<(usize, usize)> {
-    if positions.is_empty() {
+/// Merge adjacent or touching `(start, end)` byte ranges.
+fn merge_byte_ranges(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if ranges.is_empty() {
         return Vec::new();
     }
-
-    let mut ranges = Vec::new();
-    let mut start = positions[0];
-    let mut end = positions[0];
-
-    for &pos in &positions[1..] {
-        if pos == end + 1 {
-            end = pos;
+    let mut merged = Vec::new();
+    let mut cur = ranges[0];
+    for &r in &ranges[1..] {
+        if r.0 == cur.1 {
+            cur.1 = r.1;
         } else {
-            ranges.push((start, end + 1));
-            start = pos;
-            end = pos;
+            merged.push(cur);
+            cur = r;
         }
     }
-    ranges.push((start, end + 1));
-    ranges
+    merged.push(cur);
+    merged
 }
 
 // ── Calculator ────────────────────────────────────────────────────────────────

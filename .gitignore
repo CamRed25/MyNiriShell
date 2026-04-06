@@ -14,3 +14,9 @@ niri-shell/target
 niri-dock/target
 niri-panel/target
 niri-launcher/target
+.github
+
+# Build / test artifacts
+*.log
+tarpaulin-report.html
+swarm-orchestrator/

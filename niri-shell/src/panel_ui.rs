@@ -9,17 +9,9 @@ use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, Label, ListBox, ListBoxRow,
     Orientation, Popover, ProgressBar, Scale, ScrolledWindow, Separator, Switch,
 };
-use thiserror::Error;
+use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
 use crate::panel_backend::PanelState;
-
-#[derive(Debug, Error)]
-pub enum PanelUiError {
-    #[error("GTK failed to initialize")]
-    GtkInit,
-}
-
-const APP_ID: &str = "org.niri.panel";
 
 const CSS: &str = r#"
 window {
@@ -124,27 +116,21 @@ progressbar.mem-bar progress { background: #bb9af7; border-radius: 3px; }
 .notif-empty { font-size: 12px; color: #565f89; padding: 8px 4px; }
 "#;
 
-pub fn run() -> Result<(), PanelUiError> {
-    gtk4::init().map_err(|_| PanelUiError::GtkInit)?;
-    log::info!("niri-panel starting");
-
-    let app = Application::builder().application_id(APP_ID).build();
-
-    app.connect_activate(|app| {
-        load_css();
-        let state = Rc::new(RefCell::new(PanelState::new()));
-        build_window(app, state);
-    });
-
-    app.run();
-    Ok(())
+/// Called once inside `app.connect_activate`. Loads CSS and builds the panel window.
+pub fn build_panel_window(app: &Application, state: Rc<RefCell<PanelState>>) {
+    load_css();
+    build_window(app, state);
 }
 
 fn load_css() {
+    let Some(display) = gtk4::gdk::Display::default() else {
+        log::warn!("panel_ui: no GDK display, skipping CSS load");
+        return;
+    };
     let provider = gtk4::CssProvider::new();
     provider.load_from_string(CSS);
     gtk4::style_context_add_provider_for_display(
-        &gtk4::gdk::Display::default().expect("no display"),
+        &display,
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
@@ -154,11 +140,17 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("niri-panel")
-        .default_width(1920)
-        .default_height(32)
         .decorated(false)
-        .resizable(false)
         .build();
+
+    // Pin to the top edge of the output, full width, above all windows.
+    window.init_layer_shell();
+    window.set_layer(Layer::Top);
+    window.auto_exclusive_zone_enable();
+    window.set_anchor(Edge::Top, true);
+    window.set_anchor(Edge::Left, true);
+    window.set_anchor(Edge::Right, true);
+    window.set_anchor(Edge::Bottom, false);
 
     let bar = GtkBox::new(Orientation::Horizontal, 0);
     bar.add_css_class("panel-bar");
@@ -241,7 +233,8 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     date_label.add_css_class("date-label");
     time_box.append(&time_label);
     time_box.append(&date_label);
-    center.append(&time_box);
+    center.append(&weather_pill);
+    // time is placed in the right section, next to net stats
 
     bar.append(&center);
 
@@ -250,10 +243,17 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     spacer2.set_hexpand(true);
     bar.append(&spacer2);
 
-    // ── Right: stats + quick settings + notifications ─────────────────────────
+    // ── Right: time + stats + quick settings + notifications ──────────────────
     let right = GtkBox::new(Orientation::Horizontal, 6);
     right.set_valign(gtk4::Align::Center);
     right.set_margin_start(4);
+
+    // Time/date — sits right before network stats
+    let time_sep = Separator::new(Orientation::Vertical);
+    time_sep.set_margin_start(2);
+    time_sep.set_margin_end(2);
+    right.append(&time_box);
+    right.append(&time_sep);
 
     // Network pill
     let net_pill = GtkBox::new(Orientation::Horizontal, 4);
@@ -344,7 +344,6 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     window.present();
 
     // ── Timer: refresh display every 2 seconds ────────────────────────────────
-    // Tick once immediately so labels show correct time on startup.
     tick_time(&time_label, &date_label);
 
     let time_lbl_c = time_label.clone();
@@ -359,27 +358,53 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     let track_c = track_label.clone();
     let wtemp_c = weather_temp.clone();
     let wloc_c = weather_loc.clone();
-    let ws_dots_c = ws_dots.clone();
     let state_c = Rc::clone(&state);
+
+    // Fast 200 ms timer — only updates workspace dots so they feel instant.
+    {
+        let dots = ws_dots.clone();
+        let state_fast = Rc::clone(&state);
+        glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+            let s = state_fast.borrow();
+            let ws = &s.workspaces;
+            for (i, dot) in dots.iter().enumerate() {
+                dot.remove_css_class("ws-dot-active");
+                dot.remove_css_class("ws-dot-occupied");
+                if i < ws.names.len() {
+                    if i == ws.current_index {
+                        dot.add_css_class("ws-dot-active");
+                    } else if ws.occupied.get(i).copied().unwrap_or(false) {
+                        dot.add_css_class("ws-dot-occupied");
+                    }
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 
     glib::timeout_add_seconds_local(2, move || {
         tick_time(&time_lbl_c, &date_lbl_c);
 
-        let s = state_c.borrow();
-
-        // Workspace dots
-        let ws = &s.workspaces;
-        for (i, dot) in ws_dots_c.iter().enumerate() {
-            dot.remove_css_class("ws-dot-active");
-            dot.remove_css_class("ws-dot-occupied");
-            if i < ws.names.len() {
-                if i == ws.current_index {
-                    dot.add_css_class("ws-dot-active");
-                } else if ws.occupied.get(i).copied().unwrap_or(false) {
-                    dot.add_css_class("ws-dot-occupied");
-                }
-            }
+        // Pull live system stats and write them into shared state.
+        if let Some(snap) = crate::sysinfo::sample() {
+            let mut s = state_c.borrow_mut();
+            let _ = s.update_stats(
+                snap.cpu_percent,
+                snap.memory_used,
+                snap.memory_total,
+                snap.net_up,
+                snap.net_down,
+                snap.volume,
+            );
         }
+
+        // Pull MPRIS media (non-blocking D-Bus poll).
+        if let Some(m) = crate::media::poll_media() {
+            let mut s = state_c.borrow_mut();
+            let _ = s.update_media(m.title.clone(), m.artist.clone(), m.playing);
+        }
+
+        let s = state_c.borrow();
 
         // Media
         if !s.media.track_name.is_empty() {
@@ -602,14 +627,12 @@ fn build_notifications_popover(state: Rc<RefCell<PanelState>>) -> Popover {
     popover
 }
 
-/// Wraps a widget in a bare `ListBoxRow`.
 fn make_notif_row_widget(child: &impl IsA<gtk4::Widget>) -> ListBoxRow {
     let row = ListBoxRow::new();
     row.set_child(Some(child));
     row
 }
 
-/// Update the time and date labels from the system clock.
 fn tick_time(time_lbl: &Label, date_lbl: &Label) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -618,22 +641,28 @@ fn tick_time(time_lbl: &Label, date_lbl: &Label) {
         .as_secs();
     let (h, m) = ((secs / 3600) % 24, (secs / 60) % 60);
     time_lbl.set_text(&format!("{h:02}:{m:02}"));
-    // Minimal day/date using day-of-week from epoch (epoch = Thu Jan 1 1970)
     let days_since_epoch = secs / 86400;
-    let dow = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]
-        [(days_since_epoch % 7) as usize];
-    // Approximate month/day — good enough for a display label
+    let dow =
+        ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][(days_since_epoch % 7) as usize];
     let days_in_year = days_since_epoch % 365;
     let (month, dom) = approx_month_day(days_in_year);
     date_lbl.set_text(&format!("{dow}, {month} {dom}"));
 }
 
-/// Cheaply approximates a month name and day-of-month from a day-of-year (0-based, non-leap).
 fn approx_month_day(day: u64) -> (&'static str, u64) {
     const MONTHS: [(&str, u64); 12] = [
-        ("Jan", 31), ("Feb", 28), ("Mar", 31), ("Apr", 30),
-        ("May", 31), ("Jun", 30), ("Jul", 31), ("Aug", 31),
-        ("Sep", 30), ("Oct", 31), ("Nov", 30), ("Dec", 31),
+        ("Jan", 31),
+        ("Feb", 28),
+        ("Mar", 31),
+        ("Apr", 30),
+        ("May", 31),
+        ("Jun", 30),
+        ("Jul", 31),
+        ("Aug", 31),
+        ("Sep", 30),
+        ("Oct", 31),
+        ("Nov", 30),
+        ("Dec", 31),
     ];
     let mut remaining = day;
     for (name, days) in MONTHS {
@@ -645,7 +674,6 @@ fn approx_month_day(day: u64) -> (&'static str, u64) {
     ("Dec", 31)
 }
 
-/// Format a byte-per-second speed as a human-readable string.
 fn fmt_speed(bps: u64) -> String {
     if bps >= 1_048_576 {
         format!("{:.1} MB/s", bps as f64 / 1_048_576.0)
@@ -655,4 +683,3 @@ fn fmt_speed(bps: u64) -> String {
         format!("{bps} B/s")
     }
 }
-
