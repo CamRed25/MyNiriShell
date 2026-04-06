@@ -129,9 +129,10 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
     refresh_active_section(&active_section, &state);
     bar.append(&active_section);
 
-    // Separator between sections.
+    // Separator between sections — hidden when no windows are open.
     let sep = Separator::new(Orientation::Vertical);
     sep.add_css_class("dock-separator");
+    sep.set_visible(!state.borrow().active.is_empty());
     bar.append(&sep);
 
     // Right section: pinned apps with drag-and-drop reordering.
@@ -142,12 +143,16 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
     // Poll every 500 ms to reflect open-window and focus changes.
     let active_weak = active_section.downgrade();
     let pinned_weak = pinned_section.downgrade();
+    let sep_weak = sep.downgrade();
     glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
         let (Some(active), Some(pinned)) = (active_weak.upgrade(), pinned_weak.upgrade()) else {
             return glib::ControlFlow::Break;
         };
         refresh_active_section(&active, &state);
         refresh_pinned_section(&pinned, &state);
+        if let Some(s) = sep_weak.upgrade() {
+            s.set_visible(!state.borrow().active.is_empty());
+        }
         glib::ControlFlow::Continue
     });
 
@@ -308,9 +313,18 @@ fn build_dock_item(
     let item_for_click = item.clone();
     let state_for_click = state;
     btn.connect_clicked(move |_| {
-        let s = state_for_click.borrow();
-        if let Err(e) = s.launch(&item_for_click) {
-            log::error!("launch '{}': {e}", item_for_click.name);
+        if item_for_click.niri_id != 0 {
+            // Window already open — focus it via niri IPC.
+            if let Err(e) = crate::ipc::send_action(crate::ipc::types::NiriAction::FocusWindow {
+                id: item_for_click.niri_id,
+            }) {
+                log::warn!("focus window {}: {e}", item_for_click.niri_id);
+            }
+        } else {
+            let s = state_for_click.borrow();
+            if let Err(e) = s.launch(&item_for_click) {
+                log::error!("launch '{}': {e}", item_for_click.name);
+            }
         }
     });
 

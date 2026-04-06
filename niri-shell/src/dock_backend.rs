@@ -4,6 +4,8 @@
 #![allow(dead_code)]
 
 use std::process::Command;
+
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -60,6 +62,64 @@ impl DockItem {
     }
 }
 
+// ── Pin persistence ──────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+struct PinEntry {
+    id: String,
+    name: String,
+    icon: String,
+}
+
+fn pins_path() -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            std::path::PathBuf::from(home).join(".config")
+        });
+    base.join("niri-shell/pins.json")
+}
+
+fn default_pins() -> Vec<DockItem> {
+    vec![
+        DockItem::pinned("org.gnome.Nautilus", "Files", "org.gnome.Nautilus"),
+        DockItem::pinned("org.gnome.Terminal", "Terminal", "org.gnome.Terminal"),
+        DockItem::pinned("firefox", "Firefox", "firefox"),
+        DockItem::pinned("org.gnome.Settings", "Settings", "org.gnome.Settings"),
+        DockItem::pinned("org.gnome.TextEditor", "Text Editor", "org.gnome.TextEditor"),
+        DockItem::pinned("code", "VS Code", "com.visualstudio.code"),
+    ]
+}
+
+fn load_pins_from_disk() -> Option<Vec<DockItem>> {
+    let text = std::fs::read_to_string(pins_path()).ok()?;
+    let entries: Vec<PinEntry> = serde_json::from_str(&text).ok()?;
+    if entries.is_empty() {
+        return None;
+    }
+    Some(entries.into_iter().map(|e| DockItem::pinned(e.id, e.name, e.icon)).collect())
+}
+
+fn save_pins_to_disk(pins: &[DockItem]) {
+    let path = pins_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let entries: Vec<PinEntry> = pins
+        .iter()
+        .map(|p| PinEntry { id: p.id.clone(), name: p.name.clone(), icon: p.icon.clone() })
+        .collect();
+    match serde_json::to_string(&entries) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                log::warn!("Failed to save dock pins: {e}");
+            }
+        }
+        Err(e) => log::warn!("Failed to serialize dock pins: {e}"),
+    }
+}
+
 pub struct DockState {
     pub pinned: Vec<DockItem>,
     pub active: Vec<DockItem>,
@@ -67,17 +127,8 @@ pub struct DockState {
 
 impl DockState {
     pub fn new() -> Self {
-        Self {
-            pinned: vec![
-                DockItem::pinned("org.gnome.Nautilus", "Files", "org.gnome.Nautilus"),
-                DockItem::pinned("org.gnome.Terminal", "Terminal", "org.gnome.Terminal"),
-                DockItem::pinned("firefox", "Firefox", "firefox"),
-                DockItem::pinned("org.gnome.Settings", "Settings", "org.gnome.Settings"),
-                DockItem::pinned("org.gnome.TextEditor", "Text Editor", "org.gnome.TextEditor"),
-                DockItem::pinned("code", "VS Code", "com.visualstudio.code"),
-            ],
-            active: Vec::new(),
-        }
+        let pinned = load_pins_from_disk().unwrap_or_else(default_pins);
+        Self { pinned, active: Vec::new() }
     }
 
     /// Replace the active-window list with a fresh snapshot from the compositor.
@@ -93,6 +144,7 @@ impl DockState {
         }
         let item = self.pinned.remove(from);
         self.pinned.insert(to, item);
+        save_pins_to_disk(&self.pinned);
         Ok(())
     }
 

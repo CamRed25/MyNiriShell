@@ -477,9 +477,10 @@ fn build_window(app: &Application) {
             if w.is_visible() {
                 w.set_visible(false);
             } else {
-                // Reset search before presenting.
+                // Reload app list (picks up newly installed apps) then reset.
                 {
                     let mut st = state_sig.borrow_mut();
+                    st.apps = crate::launcher_backend::load_apps();
                     st.selected = 0;
                     st.calc = None;
                     st.results = crate::launcher_backend::fuzzy_search("", &st.apps);
@@ -518,7 +519,7 @@ fn build_search_row() -> (GtkBox, Entry, Label) {
     row.append(&icon);
 
     let entry = Entry::builder()
-        .placeholder_text("search apps, files, commands…")
+        .placeholder_text("search apps…")
         .hexpand(true)
         .accessible_role(gtk4::AccessibleRole::SearchBox)
         .build();

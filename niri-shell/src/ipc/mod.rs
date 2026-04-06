@@ -111,4 +111,24 @@ impl IpcEventStream {
     }
 }
 
+/// Send a one-shot action to the niri compositor.
+/// Opens a fresh socket connection, sends the action, reads back one reply line.
+pub fn send_action(action: types::NiriAction) -> Result<(), crate::error::IpcError> {
+    use crate::error::IpcError;
+    let socket_path = env::var("NIRI_SOCKET").map_err(|_| IpcError::SocketEnvMissing)?;
+    let mut stream = UnixStream::connect(&socket_path).map_err(IpcError::Connect)?;
+    let req = serde_json::to_string(&NiriRequest::Action(action))
+        .map_err(|e| IpcError::Send(e.to_string()))?;
+    writeln!(stream, "{req}").map_err(|e| IpcError::Send(e.to_string()))?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|e| IpcError::Recv(e.to_string()))?;
+    match serde_json::from_str::<NiriReply>(line.trim())
+        .map_err(|e| IpcError::Parse(e.to_string()))?
+    {
+        NiriReply::Ok(_) => Ok(()),
+        NiriReply::Err(msg) => Err(IpcError::Recv(msg)),
+    }
+}
+
 
