@@ -88,3 +88,62 @@ fn extract_artist(
     // Fallback: try as plain string.
     extract_string(map, "xesam:artist")
 }
+
+// ── Playback control ───────────────────────────────────────────────────────────
+
+/// Send a playback command to the first active MPRIS2 player.
+/// Called from a background thread — all D-Bus work is blocking.
+fn send_mpris_command(method: &str) {
+    let conn = match zbus::blocking::Connection::session() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("media: D-Bus session failed: {e}");
+            return;
+        }
+    };
+    let dbus = match zbus::blocking::fdo::DBusProxy::new(&conn) {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("media: DBusProxy failed: {e}");
+            return;
+        }
+    };
+    let names = match dbus.list_names() {
+        Ok(n) => n,
+        Err(e) => {
+            log::warn!("media: list_names failed: {e}");
+            return;
+        }
+    };
+    let Some(player_name) = names.iter().find(|n| n.starts_with("org.mpris.MediaPlayer2.")) else {
+        log::warn!("media: {method} — no MPRIS player active");
+        return;
+    };
+    let proxy = match zbus::blocking::Proxy::new(
+        &conn,
+        player_name.clone(),
+        "/org/mpris/MediaPlayer2",
+        "org.mpris.MediaPlayer2.Player",
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("media: proxy create failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = proxy.call::<_, _, ()>(method, &()) {
+        log::warn!("media: {method} call failed: {e}");
+    }
+}
+
+pub fn send_play_pause() {
+    send_mpris_command("PlayPause");
+}
+
+pub fn send_previous() {
+    send_mpris_command("Previous");
+}
+
+pub fn send_next() {
+    send_mpris_command("Next");
+}

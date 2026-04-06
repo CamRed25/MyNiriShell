@@ -6,8 +6,9 @@ use std::{cell::RefCell, rc::Rc};
 use gtk4::{
     glib,
     prelude::*,
-    Application, ApplicationWindow, Box as GtkBox, Button, Label, ListBox, ListBoxRow,
-    Orientation, Popover, ProgressBar, Scale, ScrolledWindow, Separator, Switch,
+    Application, ApplicationWindow, Box as GtkBox, Button, EventControllerScroll,
+    EventControllerScrollFlags, Image, Label, ListBox, ListBoxRow, Orientation, Popover,
+    ProgressBar, ScrolledWindow, Separator,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
@@ -164,10 +165,14 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
 
     let ws_pill = GtkBox::new(Orientation::Horizontal, 4);
     ws_pill.add_css_class("sb-pill");
-    let ws_dots: Vec<Label> = (0..5)
+    let ws_dots: Vec<GtkBox> = (0..5)
         .map(|i| {
-            let d = Label::new(None);
+            let d = GtkBox::new(Orientation::Horizontal, 0);
             d.set_size_request(7, 7);
+            d.set_hexpand(false);
+            d.set_vexpand(false);
+            d.set_halign(gtk4::Align::Center);
+            d.set_valign(gtk4::Align::Center);
             d.add_css_class("ws-dot");
             if i == 0 {
                 d.add_css_class("ws-dot-active");
@@ -176,26 +181,59 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
             d
         })
         .collect();
+    // Scroll wheel on workspace dots to switch workspaces.
+    {
+        let scroll = EventControllerScroll::new(EventControllerScrollFlags::VERTICAL);
+        scroll.connect_scroll(|_ctrl, _dx, dy| {
+            let action =
+                if dy < 0.0 { "focus-workspace-up" } else { "focus-workspace-down" };
+            let _ = std::process::Command::new("niri")
+                .args(["msg", "action", action])
+                .spawn();
+            glib::Propagation::Stop
+        });
+        ws_pill.add_controller(scroll);
+    }
     left.append(&ws_pill);
 
     let media_pill = GtkBox::new(Orientation::Horizontal, 5);
     media_pill.add_css_class("sb-pill");
-    let prev_btn = Button::with_label("◀");
+
+    let prev_btn = Button::new();
+    {
+        let img = Image::from_icon_name("media-skip-backward-symbolic");
+        img.set_pixel_size(12);
+        prev_btn.set_child(Some(&img));
+    }
     prev_btn.add_css_class("media-btn");
-    let play_btn = Button::with_label("▶");
+    prev_btn.connect_clicked(|_| {
+        std::thread::spawn(|| { crate::media::send_previous(); });
+    });
+
+    let play_icon = Image::from_icon_name("media-playback-start-symbolic");
+    play_icon.set_pixel_size(12);
+    let play_btn = Button::new();
+    play_btn.set_child(Some(&play_icon));
     play_btn.add_css_class("media-btn");
-    let next_btn = Button::with_label("▶▶");
+    play_btn.connect_clicked(|_| {
+        std::thread::spawn(|| { crate::media::send_play_pause(); });
+    });
+
+    let next_btn = Button::new();
+    {
+        let img = Image::from_icon_name("media-skip-forward-symbolic");
+        img.set_pixel_size(12);
+        next_btn.set_child(Some(&img));
+    }
     next_btn.add_css_class("media-btn");
+    next_btn.connect_clicked(|_| {
+        std::thread::spawn(|| { crate::media::send_next(); });
+    });
+
     let track_label = Label::new(Some("No media"));
     track_label.add_css_class("media-track");
     track_label.set_max_width_chars(20);
     track_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-    {
-        let state_c = Rc::clone(&state);
-        play_btn.connect_clicked(move |_| {
-            let _ = state_c.borrow_mut().toggle_playback();
-        });
-    }
     media_pill.append(&prev_btn);
     media_pill.append(&play_btn);
     media_pill.append(&next_btn);
@@ -314,21 +352,17 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     vol_pct_lbl.add_css_class("vol-pct");
     vol_pill.append(&vol_icon);
     vol_pill.append(&vol_pct_lbl);
+    // Scroll wheel adjusts volume ±5%.
+    {
+        let scroll = EventControllerScroll::new(EventControllerScrollFlags::VERTICAL);
+        scroll.connect_scroll(|_ctrl, _dx, dy| {
+            let delta: i8 = if dy < 0.0 { 5 } else { -5 };
+            crate::sysinfo::set_volume_delta(delta);
+            glib::Propagation::Stop
+        });
+        vol_pill.add_controller(scroll);
+    }
     right.append(&vol_pill);
-
-    // Separator
-    let sep = Separator::new(Orientation::Vertical);
-    sep.set_margin_start(2);
-    sep.set_margin_end(2);
-    right.append(&sep);
-
-    // Quick settings button + popover
-    let qs_btn = Button::with_label("⚙");
-    qs_btn.add_css_class("icon-btn");
-    let qs_popover = build_quick_settings_popover(Rc::clone(&state));
-    qs_popover.set_parent(&qs_btn);
-    qs_btn.connect_clicked(move |_| qs_popover.popup());
-    right.append(&qs_btn);
 
     // Notifications button + popover
     let notif_btn = Button::with_label("🔔");
@@ -356,6 +390,7 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     let mem_pct_c = mem_pct_lbl.clone();
     let vol_c = vol_pct_lbl.clone();
     let track_c = track_label.clone();
+    let play_icon_c = play_icon.clone();
     let wtemp_c = weather_temp.clone();
     let wloc_c = weather_loc.clone();
     let state_c = Rc::clone(&state);
@@ -407,6 +442,11 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
         let s = state_c.borrow();
 
         // Media
+        if s.media.playing {
+            play_icon_c.set_icon_name(Some("media-playback-pause-symbolic"));
+        } else {
+            play_icon_c.set_icon_name(Some("media-playback-start-symbolic"));
+        }
         if !s.media.track_name.is_empty() {
             track_c.set_text(&format!("{} — {}", s.media.artist, s.media.track_name));
         }
@@ -442,107 +482,6 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
 
         glib::ControlFlow::Continue
     });
-}
-
-fn build_quick_settings_popover(state: Rc<RefCell<PanelState>>) -> Popover {
-    let popover = Popover::new();
-    popover.set_has_arrow(false);
-    popover.set_position(gtk4::PositionType::Bottom);
-
-    let root = GtkBox::new(Orientation::Vertical, 8);
-    root.set_margin_top(8);
-    root.set_margin_bottom(8);
-    root.set_margin_start(12);
-    root.set_margin_end(12);
-    root.set_size_request(200, -1);
-
-    let title = Label::new(Some("Quick Settings"));
-    title.add_css_class("qs-title");
-    title.set_halign(gtk4::Align::Start);
-    root.append(&title);
-
-    // Wi-Fi row
-    let wifi_row = GtkBox::new(Orientation::Horizontal, 0);
-    wifi_row.add_css_class("qs-row");
-    let wifi_lbl = Label::new(Some("Wi-Fi"));
-    wifi_lbl.add_css_class("qs-label");
-    wifi_lbl.set_hexpand(true);
-    wifi_lbl.set_halign(gtk4::Align::Start);
-    let wifi_sw = Switch::new();
-    wifi_sw.set_active(state.borrow().quick_settings.wifi_enabled);
-    {
-        let state_c = Rc::clone(&state);
-        wifi_sw.connect_state_set(move |_, active| {
-            let qs = &state_c.borrow().quick_settings;
-            let _ = state_c.borrow_mut().update_quick_settings(
-                active,
-                qs.wifi_ssid.clone(),
-                qs.bluetooth_enabled,
-                qs.brightness_percent,
-            );
-            glib::Propagation::Proceed
-        });
-    }
-    wifi_row.append(&wifi_lbl);
-    wifi_row.append(&wifi_sw);
-    root.append(&wifi_row);
-
-    // Bluetooth row
-    let bt_row = GtkBox::new(Orientation::Horizontal, 0);
-    bt_row.add_css_class("qs-row");
-    let bt_lbl = Label::new(Some("Bluetooth"));
-    bt_lbl.add_css_class("qs-label");
-    bt_lbl.set_hexpand(true);
-    bt_lbl.set_halign(gtk4::Align::Start);
-    let bt_sw = Switch::new();
-    bt_sw.set_active(state.borrow().quick_settings.bluetooth_enabled);
-    {
-        let state_c = Rc::clone(&state);
-        bt_sw.connect_state_set(move |_, active| {
-            let qs = &state_c.borrow().quick_settings;
-            let _ = state_c.borrow_mut().update_quick_settings(
-                qs.wifi_enabled,
-                qs.wifi_ssid.clone(),
-                active,
-                qs.brightness_percent,
-            );
-            glib::Propagation::Proceed
-        });
-    }
-    bt_row.append(&bt_lbl);
-    bt_row.append(&bt_sw);
-    root.append(&bt_row);
-
-    // Brightness row
-    let br_row = GtkBox::new(Orientation::Vertical, 4);
-    br_row.add_css_class("qs-row");
-    let br_lbl = Label::new(Some("Brightness"));
-    br_lbl.add_css_class("qs-label");
-    br_lbl.set_halign(gtk4::Align::Start);
-    let br_slider = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 5.0);
-    br_slider.set_value(state.borrow().quick_settings.brightness_percent as f64);
-    br_slider.set_hexpand(true);
-    br_slider.set_show_fill_level(false);
-    br_slider.set_draw_value(false);
-    {
-        let state_c = Rc::clone(&state);
-        br_slider.connect_value_changed(move |s| {
-            let val = s.value() as u8;
-            let qs = &state_c.borrow().quick_settings;
-            let _ = state_c.borrow_mut().update_quick_settings(
-                qs.wifi_enabled,
-                qs.wifi_ssid.clone(),
-                qs.bluetooth_enabled,
-                val,
-            );
-        });
-    }
-    br_row.append(&br_lbl);
-    br_row.append(&br_slider);
-    root.append(&br_row);
-
-    popover.set_child(Some(&root));
-    popover
 }
 
 fn build_notifications_popover(state: Rc<RefCell<PanelState>>) -> Popover {
