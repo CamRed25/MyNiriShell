@@ -1,5 +1,7 @@
 // Dock backend — pure Rust, zero GTK imports.
 // Manages pinned apps, active workspace windows, and launch/focus logic.
+// Public types are forward-declared for future IPC/D-Bus integration.
+#![allow(dead_code)]
 
 use std::process::Command;
 use thiserror::Error;
