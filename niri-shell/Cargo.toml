@@ -1,0 +1,13 @@
+[package]
+name = "niri-shell"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# GTK4 bindings — required for dock_ui, panel_ui, launcher_ui
+gtk4 = { version = "0.9", features = ["v4_12"] }
+# Logging — replace println!/eprintln! in production paths
+log = "0.4"
+env_logger = "0.11"
+# Typed error enums
+thiserror = "2"

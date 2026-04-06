@@ -1,0 +1,267 @@
+
+<style>
+  :root {
+    --font-sans: "Inter", "Noto Sans", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", "Noto Mono", monospace;
+    --border-radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); }
+  .scene { background: #1a1b26; border-radius: var(--border-radius-lg); padding: 16px; display: flex; flex-direction: column; gap: 14px; min-height: 600px; position: relative; }
+  .wallpaper-hint { position: absolute; inset: 0; border-radius: var(--border-radius-lg); background: linear-gradient(135deg, #1a1b26 0%, #16213e 50%, #0f3460 100%); z-index: 0; }
+
+  /* STATUS BAR */
+  .statusbar { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; background: rgba(15,15,25,0.82); border: 0.5px solid rgba(255,255,255,0.09); border-radius: 10px; padding: 6px 14px; gap: 8px; backdrop-filter: blur(8px); }
+  .sb-group { display: flex; align-items: center; gap: 10px; }
+  .sb-pill { display: flex; align-items: center; gap: 5px; background: rgba(255,255,255,0.06); border: 0.5px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 3px 8px; font-size: 11px; color: #c0caf5; }
+  .sb-pill .label { color: #565f89; font-size: 10px; }
+  .ws-dot { width: 7px; height: 7px; border-radius: 50%; background: #565f89; }
+  .ws-dot.active { background: #7aa2f7; }
+  .ws-dot.occupied { background: #3d59a1; }
+  .media-icon { width: 13px; height: 13px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .media-icon svg { width: 12px; height: 12px; fill: #7aa2f7; }
+  .media-track { font-size: 11px; color: #c0caf5; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .net-arrow { font-size: 9px; color: #9ece6a; }
+  .net-arrow.down { color: #7dcfff; }
+  .vol-bar { display: flex; align-items: flex-end; gap: 1.5px; height: 10px; }
+  .vol-bar span { width: 3px; background: #7aa2f7; border-radius: 1px; }
+  .cpu-bar { width: 32px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; }
+  .cpu-fill { height: 100%; background: #e0af68; border-radius: 3px; }
+  .mem-fill { background: #bb9af7; }
+  .time-block { text-align: center; }
+  .time-block .time { font-size: 13px; font-weight: 500; color: #c0caf5; line-height: 1; }
+  .time-block .date { font-size: 9px; color: #565f89; }
+
+  /* DESKTOP AREA */
+  .desktop { position: relative; z-index: 1; flex: 1; display: flex; align-items: center; justify-content: center; }
+  .win-group { display: flex; gap: 10px; align-items: flex-start; }
+  .mock-window { background: rgba(15,15,25,0.72); border: 0.5px solid rgba(255,255,255,0.09); border-radius: 10px; overflow: hidden; }
+  .win-titlebar { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 0.5px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.03); }
+  .win-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .win-title { font-size: 11px; color: #565f89; margin-left: 4px; }
+  .win-body { padding: 10px; }
+  .code-line { height: 5px; border-radius: 2px; background: rgba(255,255,255,0.07); margin-bottom: 5px; }
+
+  /* LAUNCHER */
+  .launcher { position: relative; z-index: 2; background: rgba(13,13,23,0.93); border: 0.5px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 14px; width: 360px; margin: 0 auto; }
+  .search-row { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); border: 0.5px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 7px 10px; margin-bottom: 12px; }
+  .search-icon { width: 14px; height: 14px; flex-shrink: 0; }
+  .search-input { background: none; border: none; outline: none; color: #c0caf5; font-size: 13px; flex: 1; font-family: var(--font-sans); }
+  .search-input::placeholder { color: #565f89; }
+  .calc-badge { font-size: 10px; color: #9ece6a; background: rgba(158,206,106,0.12); border: 0.5px solid rgba(158,206,106,0.25); border-radius: 4px; padding: 2px 6px; flex-shrink: 0; }
+  .results-section { margin-bottom: 10px; }
+  .results-label { font-size: 10px; color: #565f89; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; padding: 0 2px; }
+  .result-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+  .result-item.selected { background: rgba(122,162,247,0.14); }
+  .app-icon { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+  .result-name { font-size: 13px; color: #c0caf5; }
+  .result-sub { font-size: 10px; color: #565f89; }
+  .match-highlight { color: #7aa2f7; }
+  .divider { height: 0.5px; background: rgba(255,255,255,0.07); margin: 10px 0; }
+  .calc-area { display: flex; align-items: center; gap: 8px; padding: 4px 2px; }
+  .calc-expr { font-size: 12px; color: #7dcfff; font-family: var(--font-mono); }
+  .calc-equals { font-size: 11px; color: #565f89; }
+  .calc-result { font-size: 16px; color: #9ece6a; font-family: var(--font-mono); font-weight: 500; }
+
+  /* DOCK */
+  .dock { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; background: rgba(13,13,23,0.82); border: 0.5px solid rgba(255,255,255,0.09); border-radius: 14px; align-self: center; }
+  .dock-sep { width: 0.5px; height: 32px; background: rgba(255,255,255,0.1); margin: 0 2px; }
+  .dock-item { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
+  .dock-app { width: 38px; height: 38px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 20px; position: relative; transition: transform 0.15s; }
+  .dock-app:hover { transform: translateY(-3px); }
+  .dock-dot { width: 4px; height: 4px; border-radius: 50%; background: #7aa2f7; }
+  .dock-dot.empty { background: transparent; }
+  .dock-badge { position: absolute; top: -3px; right: -3px; width: 14px; height: 14px; border-radius: 50%; background: #f7768e; font-size: 8px; color: white; display: flex; align-items: center; justify-content: center; font-weight: 500; }
+  .ws-label { font-size: 8px; color: #565f89; }
+  .active-label { font-size: 8px; color: #7aa2f7; font-weight: 500; }
+</style>
+
+<div class="scene">
+  <div class="wallpaper-hint"></div>
+
+  <!-- STATUS BAR -->
+  <div class="statusbar">
+    <!-- Left: workspaces + media -->
+    <div class="sb-group">
+      <div class="sb-pill">
+        <div class="ws-dot active"></div>
+        <div class="ws-dot occupied"></div>
+        <div class="ws-dot occupied"></div>
+        <div class="ws-dot"></div>
+        <div class="ws-dot"></div>
+      </div>
+      <div class="sb-pill">
+        <div class="media-icon"><svg viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg></div>
+        <div class="media-icon"><svg viewBox="0 0 16 16"><rect x="2" y="2" width="4" height="12"/><rect x="10" y="2" width="4" height="12"/></svg></div>
+        <div class="media-icon"><svg viewBox="0 0 16 16"><polygon points="12,2 2,8 12,14"/></svg></div>
+        <div class="media-track">Portishead — Roads</div>
+      </div>
+    </div>
+
+    <!-- Center: time/date + weather -->
+    <div class="sb-group">
+      <div class="sb-pill">
+        <span style="font-size:13px;">⛅</span>
+        <span style="font-size:11px;color:#c0caf5;">72°F</span>
+        <span class="label">Hot Springs</span>
+      </div>
+      <div class="time-block">
+        <div class="time">14:32</div>
+        <div class="date">Sun, Apr 5</div>
+      </div>
+    </div>
+
+    <!-- Right: net, cpu, mem, vol -->
+    <div class="sb-group">
+      <div class="sb-pill">
+        <span class="net-arrow">↑</span><span style="font-size:11px;color:#9ece6a;">2.4 MB/s</span>
+        <span class="net-arrow down">↓</span><span style="font-size:11px;color:#7dcfff;">12.1 MB/s</span>
+      </div>
+      <div class="sb-pill">
+        <span class="label">CPU</span>
+        <div class="cpu-bar"><div class="cpu-fill" style="width:62%"></div></div>
+        <span style="font-size:10px;color:#e0af68;">62%</span>
+      </div>
+      <div class="sb-pill">
+        <span class="label">MEM</span>
+        <div class="cpu-bar"><div class="cpu-fill mem-fill" style="width:47%"></div></div>
+        <span style="font-size:10px;color:#bb9af7;">8.2G</span>
+      </div>
+      <div class="sb-pill">
+        <div class="vol-bar">
+          <span style="height:30%"></span>
+          <span style="height:55%"></span>
+          <span style="height:75%"></span>
+          <span style="height:100%"></span>
+          <span style="height:100%"></span>
+        </div>
+        <span style="font-size:11px;color:#c0caf5;">70%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- DESKTOP WINDOWS (background) -->
+  <div class="desktop">
+    <div class="win-group">
+      <div class="mock-window" style="width:170px;">
+        <div class="win-titlebar">
+          <div class="win-dot" style="background:#f7768e"></div>
+          <div class="win-dot" style="background:#e0af68"></div>
+          <div class="win-dot" style="background:#9ece6a"></div>
+          <span class="win-title">kitty — nvim</span>
+        </div>
+        <div class="win-body">
+          <div class="code-line" style="width:90%"></div>
+          <div class="code-line" style="width:60%;background:rgba(122,162,247,0.2)"></div>
+          <div class="code-line" style="width:75%"></div>
+          <div class="code-line" style="width:50%"></div>
+          <div class="code-line" style="width:80%"></div>
+          <div class="code-line" style="width:40%"></div>
+        </div>
+      </div>
+      <div class="mock-window" style="width:130px;">
+        <div class="win-titlebar">
+          <div class="win-dot" style="background:#f7768e"></div>
+          <div class="win-dot" style="background:#e0af68"></div>
+          <div class="win-dot" style="background:#9ece6a"></div>
+          <span class="win-title">firefox</span>
+        </div>
+        <div class="win-body">
+          <div style="height:5px;background:rgba(122,162,247,0.15);border-radius:2px;margin-bottom:6px;"></div>
+          <div class="code-line" style="width:100%"></div>
+          <div class="code-line" style="width:85%"></div>
+          <div class="code-line" style="width:70%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LAUNCHER overlay -->
+    <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+      <div class="launcher">
+        <div class="search-row">
+          <svg class="search-icon" viewBox="0 0 16 16" fill="none" stroke="#565f89" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+          <input class="search-input" placeholder="search apps, files, commands…" value="fir" readonly />
+          <div class="calc-badge">= calculator</div>
+        </div>
+
+        <div class="results-section">
+          <div class="results-label">apps</div>
+          <div class="result-item selected">
+            <div class="app-icon" style="background:rgba(255,107,60,0.18);">🦊</div>
+            <div>
+              <div class="result-name"><span class="match-highlight">Fir</span>efox</div>
+              <div class="result-sub">browser</div>
+            </div>
+          </div>
+          <div class="result-item">
+            <div class="app-icon" style="background:rgba(122,162,247,0.15);">📁</div>
+            <div>
+              <div class="result-name"><span class="match-highlight">Fir</span>ejail</div>
+              <div class="result-sub">security sandbox</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="results-section">
+          <div class="results-label">calculator</div>
+          <div class="calc-area">
+            <span class="calc-expr">12 * (3 + 4.5)</span>
+            <span class="calc-equals">=</span>
+            <span class="calc-result">90</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DOCK -->
+  <div class="dock">
+    <!-- active workspace apps -->
+    <div style="display:flex;align-items:center;gap:4px;">
+      <div style="font-size:8px;color:#565f89;writing-mode:initial;margin-right:4px;">ws 1</div>
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(255,107,60,0.18);" title="Firefox">🦊
+          <div class="dock-badge">3</div>
+        </div>
+        <div class="dock-dot"></div>
+      </div>
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(30,215,96,0.12);" title="Kitty">🐱</div>
+        <div class="dock-dot"></div>
+      </div>
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(122,162,247,0.15);" title="VS Code">🖥️</div>
+        <div class="dock-dot"></div>
+      </div>
+    </div>
+
+    <div class="dock-sep"></div>
+
+    <!-- static everyday apps -->
+    <div style="display:flex;align-items:center;gap:4px;">
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(187,154,247,0.15);" title="Files">📂</div>
+        <div class="dock-dot empty"></div>
+      </div>
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(224,175,104,0.15);" title="Spotify">🎵</div>
+        <div class="dock-dot empty"></div>
+      </div>
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(125,207,255,0.12);" title="Discord">💬</div>
+        <div class="dock-dot empty"></div>
+      </div>
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(158,206,106,0.12);" title="Obsidian">🟣</div>
+        <div class="dock-dot empty"></div>
+      </div>
+      <div class="dock-item">
+        <div class="dock-app" style="background:rgba(247,118,142,0.12);" title="Settings">⚙️</div>
+        <div class="dock-dot empty"></div>
+      </div>
+    </div>
+  </div>
+
+</div>

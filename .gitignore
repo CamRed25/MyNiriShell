@@ -6,3 +6,11 @@ proof/
 .context/
 .locks/
 node_modules/
+
+# Copilot Orchestrator temporary files
+.orchestrator/
+.worktrees/
+niri-shell/target
+niri-dock/target
+niri-panel/target
+niri-launcher/target
