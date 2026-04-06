@@ -1,4 +1,6 @@
 // Backend logic for the Niri panel. Zero GTK4 imports — pure Rust data and update methods.
+// Public types are forward-declared for future D-Bus / IPC integration.
+#![allow(dead_code)]
 
 use thiserror::Error;
 
@@ -40,13 +42,13 @@ pub enum MediaError {
 #[derive(Debug, Error)]
 pub enum StatsError {
     #[error("cpu percentage out of range: {0}")]
-    InvalidCpu(f32),
+    CpuOutOfRange(f32),
 
     #[error("memory value invalid: used {used} > total {total}")]
-    InvalidMemory { used: u64, total: u64 },
+    MemoryUsedExceedsTotal { used: u64, total: u64 },
 
     #[error("volume percentage out of range: {0}")]
-    InvalidVolume(u8),
+    VolumeOutOfRange(u8),
 }
 
 #[derive(Debug, Error)]
@@ -205,13 +207,16 @@ impl PanelState {
         volume_percent: u8,
     ) -> Result<(), StatsError> {
         if !(0.0..=100.0).contains(&cpu_percent) {
-            return Err(StatsError::InvalidCpu(cpu_percent));
+            return Err(StatsError::CpuOutOfRange(cpu_percent));
         }
         if memory_used > memory_total {
-            return Err(StatsError::InvalidMemory { used: memory_used, total: memory_total });
+            return Err(StatsError::MemoryUsedExceedsTotal {
+                used: memory_used,
+                total: memory_total,
+            });
         }
         if volume_percent > 100 {
-            return Err(StatsError::InvalidVolume(volume_percent));
+            return Err(StatsError::VolumeOutOfRange(volume_percent));
         }
         self.stats = SystemStats {
             cpu_percent,
@@ -362,7 +367,7 @@ mod tests {
         let mut s = state();
         assert!(matches!(
             s.update_stats(101.0, 0, 0, 0, 0, 0),
-            Err(StatsError::InvalidCpu(_))
+            Err(StatsError::CpuOutOfRange(_))
         ));
     }
 
@@ -371,7 +376,7 @@ mod tests {
         let mut s = state();
         assert!(matches!(
             s.update_stats(50.0, 10, 5, 0, 0, 50),
-            Err(StatsError::InvalidMemory { .. })
+            Err(StatsError::MemoryUsedExceedsTotal { .. })
         ));
     }
 
