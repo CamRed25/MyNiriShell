@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::launcher_backend::{
-    evaluate_expression, fuzzy_search, launch_app, load_apps, CalcResult, SearchResult,
+    apply_frecency, evaluate_expression, fuzzy_search, launch_app, load_apps,
+    load_clipboard_history, load_recent_files, paste_clipboard_entry, CalcResult, ClipboardEntry,
+    FrecencyStore, RecentFile, SearchResult,
 };
 
 const WINDOW_WIDTH: i32 = 360;
@@ -141,6 +143,10 @@ separator.divider {
 .high-contrast .section-label { color: #bbbbbb; }
 .high-contrast .result-item.selected { background: rgba(122, 162, 247, 0.35); }
 .high-contrast entry > text { color: #ffffff; }
+
+.recent-icon { color: #7dcfff; font-size: 13px; margin-right: 2px; }
+.clip-icon   { color: #bb9af7; font-size: 13px; margin-right: 2px; }
+.clip-preview { font-size: 11px; color: #a9b1d6; font-family: \"JetBrains Mono\", monospace; }
 "#;
 
 struct LauncherState {
@@ -149,6 +155,11 @@ struct LauncherState {
     selected: usize,
     calc: Option<CalcResult>,
     run_cmd: Option<String>,
+    /// Non-empty when `cc ` prefix is active.
+    clipboard: Vec<ClipboardEntry>,
+    /// Non-empty when query is empty and recent files are loaded.
+    recent: Vec<RecentFile>,
+    frecency: FrecencyStore,
 }
 
 /// Called once inside `app.connect_activate`. Loads CSS and builds the launcher window.
@@ -170,7 +181,10 @@ fn build_window(app: &Application) {
     let apps = load_apps();
     log::info!("niri-launcher: loaded {} app entries", apps.len());
 
-    let initial_results = fuzzy_search("", &apps);
+    let frecency = FrecencyStore::load();
+    let mut initial_results = fuzzy_search("", &apps);
+    apply_frecency(&mut initial_results, &frecency);
+    let initial_recent = load_recent_files(6);
 
     let state = Rc::new(RefCell::new(LauncherState {
         apps,
@@ -178,6 +192,9 @@ fn build_window(app: &Application) {
         selected: 0,
         calc: None,
         run_cmd: None,
+        clipboard: Vec::new(),
+        recent: initial_recent,
+        frecency,
     }));
 
     let window = ApplicationWindow::builder()
@@ -235,6 +252,76 @@ fn build_window(app: &Application) {
     apps_section.append(&list_box);
     root.append(&apps_section);
 
+    // Recent files section — shown when query is empty.
+    let recent_section = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(0)
+        .margin_bottom(8)
+        .build();
+    {
+        let lbl = Label::builder().label("recent").halign(gtk4::Align::Start).build();
+        lbl.add_css_class("section-label");
+        recent_section.append(&lbl);
+        let recent_list = ListBox::builder()
+            .selection_mode(gtk4::SelectionMode::None)
+            .build();
+        recent_list.set_activate_on_single_click(true);
+        {
+            let st = state.borrow();
+            update_recent_list(&recent_list, &st.recent);
+        }
+        {
+            let window_weak = window.downgrade();
+            recent_list.connect_row_activated(move |_lb, row| {
+                // Each row stores the URI in its widget name.
+                let uri = row.widget_name().to_string();
+                if !uri.is_empty() {
+                    let _ = std::process::Command::new("xdg-open").arg(&uri).spawn();
+                    if let Some(w) = window_weak.upgrade() {
+                        w.set_visible(false);
+                    }
+                }
+            });
+        }
+        recent_section.append(&recent_list);
+        // Store the inner list for refresh.
+        recent_section.set_widget_name("recent-list-host");
+    }
+    root.append(&recent_section);
+
+    // Clipboard history section — shown when `cc ` prefix is active.
+    let clip_section = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(0)
+        .margin_bottom(8)
+        .visible(false)
+        .build();
+    {
+        let lbl = Label::builder().label("clipboard history").halign(gtk4::Align::Start).build();
+        lbl.add_css_class("section-label");
+        clip_section.append(&lbl);
+        let clip_list = ListBox::builder()
+            .selection_mode(gtk4::SelectionMode::None)
+            .build();
+        clip_list.set_activate_on_single_click(true);
+        {
+            let window_weak = window.downgrade();
+            let state_c = Rc::clone(&state);
+            clip_list.connect_row_activated(move |_lb, row| {
+                let idx = row.index() as usize;
+                let raw = state_c.borrow().clipboard.get(idx).map(|e| e.raw.clone());
+                if let Some(raw) = raw {
+                    paste_clipboard_entry(&raw);
+                    if let Some(w) = window_weak.upgrade() {
+                        w.set_visible(false);
+                    }
+                }
+            });
+        }
+        clip_section.append(&clip_list);
+    }
+    root.append(&clip_section);
+
     let divider = Separator::builder().orientation(Orientation::Horizontal).build();
     divider.add_css_class("divider");
     root.append(&divider);
@@ -289,13 +376,43 @@ fn build_window(app: &Application) {
         let calc_section = calc_section.clone();
         let calc_expr_label = calc_expr_label.clone();
         let calc_result_label = calc_result_label.clone();
+        let clip_section = clip_section.clone();
+        let recent_section = recent_section.clone();
 
         entry.connect_changed(move |e| {
             let text = e.text().to_string();
 
+            // `cc ` prefix → clipboard history mode.
+            if text.starts_with("cc") && (text.len() == 2 || text.as_bytes().get(2) == Some(&b' ')) {
+                let filter = if text.len() > 3 { text[3..].to_owned() } else { String::new() };
+                let entries = load_clipboard_history(20);
+                let filtered: Vec<ClipboardEntry> = if filter.is_empty() {
+                    entries
+                } else {
+                    entries.into_iter().filter(|e| e.preview.contains(&filter)).collect()
+                };
+                {
+                    let mut st = state.borrow_mut();
+                    st.results = Vec::new();
+                    st.selected = 0;
+                    st.calc = None;
+                    st.run_cmd = None;
+                    st.clipboard = filtered.clone();
+                }
+                update_clipboard_list(get_clip_list(&clip_section).as_ref(), &filtered);
+                clip_section.set_visible(true);
+                recent_section.set_visible(false);
+                calc_badge.set_visible(false);
+                calc_section.set_visible(false);
+                update_results_list(&list_box, &[], 0);
+                return;
+            }
+
+            clip_section.set_visible(false);
+
             // `>` prefix → run-command mode.
-            if text.starts_with('>') {
-                let cmd = text[1..].trim().to_owned();
+            if let Some(stripped) = text.strip_prefix('>') {
+                let cmd = stripped.trim().to_owned();
                 {
                     let mut st = state.borrow_mut();
                     st.results = Vec::new();
@@ -305,12 +422,21 @@ fn build_window(app: &Application) {
                 }
                 calc_badge.set_visible(false);
                 calc_section.set_visible(false);
+                recent_section.set_visible(false);
                 update_run_list(&list_box, if cmd.is_empty() { None } else { Some(&cmd) });
                 return;
             }
 
-            // Normal mode — clear any leftover run_cmd.
+            // Normal mode — clear any leftover run_cmd / clipboard.
             state.borrow_mut().run_cmd = None;
+            state.borrow_mut().clipboard = Vec::new();
+
+            // Show recent files when query is empty.
+            if text.trim().is_empty() {
+                recent_section.set_visible(true);
+            } else {
+                recent_section.set_visible(false);
+            }
 
             let calc = if !text.trim().is_empty() {
                 let r = evaluate_expression(&text);
@@ -321,7 +447,9 @@ fn build_window(app: &Application) {
 
             let results = {
                 let st = state.borrow();
-                fuzzy_search(&text, &st.apps)
+                let mut r = fuzzy_search(&text, &st.apps);
+                apply_frecency(&mut r, &st.frecency);
+                r
             };
 
             let has_calc = calc.is_some();
@@ -371,6 +499,7 @@ fn build_window(app: &Application) {
                 match launch_app(&entry) {
                     Ok(()) => {
                         log::info!("Launched: {}", entry.name);
+                        state.borrow_mut().frecency.record(&entry.id);
                         if let Some(w) = window_weak.upgrade() {
                             w.set_visible(false);
                         }
@@ -404,6 +533,7 @@ fn build_window(app: &Application) {
                 match launch_app(&entry) {
                     Ok(()) => {
                         log::info!("Launched: {}", entry.name);
+                        state.borrow_mut().frecency.record(&entry.id);
                         if let Some(w) = window_weak.upgrade() {
                             w.set_visible(false);
                         }
@@ -480,6 +610,7 @@ fn build_window(app: &Application) {
                         match launch_app(&entry) {
                             Ok(()) => {
                                 log::info!("Launched: {}", entry.name);
+                                state.borrow_mut().frecency.record(&entry.id);
                                 if let Some(w) = window_weak.upgrade() {
                                     w.set_visible(false);
                                 }
@@ -530,7 +661,9 @@ fn build_window(app: &Application) {
                     st.selected = 0;
                     st.calc = None;
                     st.run_cmd = None;
-                    st.results = crate::launcher_backend::fuzzy_search("", &st.apps);
+                    let mut r = crate::launcher_backend::fuzzy_search("", &st.apps);
+                    apply_frecency(&mut r, &st.frecency);
+                    st.results = r;
                 }
                 if let Some(e) = entry_weak.upgrade() {
                     e.set_text("");
@@ -594,6 +727,70 @@ fn update_results_list(list_box: &ListBox, results: &[SearchResult], selected: u
         list_box.append(&row);
     }
 }
+
+fn update_recent_list(list_box: &ListBox, files: &[RecentFile]) {
+    while let Some(child) = list_box.first_child() {
+        list_box.remove(&child);
+    }
+    for file in files.iter().take(6) {
+        let item = GtkBox::new(Orientation::Horizontal, 8);
+        item.add_css_class("result-item");
+        let icon = Label::new(Some("📄"));
+        icon.add_css_class("recent-icon");
+        let name = Label::builder()
+            .label(file.name.as_str())
+            .halign(gtk4::Align::Start)
+            .ellipsize(gtk4::pango::EllipsizeMode::Middle)
+            .hexpand(true)
+            .build();
+        name.add_css_class("result-name");
+        item.append(&icon);
+        item.append(&name);
+        let row = ListBoxRow::builder().selectable(false).activatable(true).build();
+        row.set_widget_name(&file.uri);
+        row.set_child(Some(&item));
+        list_box.append(&row);
+    }
+}
+
+fn update_clipboard_list(list_box: Option<&ListBox>, entries: &[ClipboardEntry]) {
+    let Some(list_box) = list_box else { return };
+    while let Some(child) = list_box.first_child() {
+        list_box.remove(&child);
+    }
+    for entry in entries.iter().take(10) {
+        let item = GtkBox::new(Orientation::Horizontal, 8);
+        item.add_css_class("result-item");
+        let icon = Label::new(Some("📋"));
+        icon.add_css_class("clip-icon");
+        let preview = Label::builder()
+            .label(entry.preview.as_str())
+            .halign(gtk4::Align::Start)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .hexpand(true)
+            .build();
+        preview.add_css_class("clip-preview");
+        item.append(&icon);
+        item.append(&preview);
+        let row = ListBoxRow::builder().selectable(false).activatable(true).build();
+        row.set_child(Some(&item));
+        list_box.append(&row);
+    }
+}
+
+/// Get the inner ListBox from a section GtkBox created with a named child ListBox.
+fn get_clip_list(section: &GtkBox) -> Option<ListBox> {
+    use gtk4::prelude::WidgetExt;
+    let mut child = section.first_child();
+    while let Some(c) = child {
+        if let Ok(lb) = c.clone().dynamic_cast::<ListBox>() {
+            return Some(lb);
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
 
 fn update_run_list(list_box: &ListBox, cmd: Option<&str>) {
     while let Some(child) = list_box.first_child() {

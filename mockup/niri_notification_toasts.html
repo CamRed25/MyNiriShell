@@ -1,0 +1,131 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.scene { background: #1a1b26; border-radius: 14px; padding: 20px; font-family: var(--font-sans); display: flex; flex-direction: column; gap: 10px; }
+.scene-label { font-size: 10px; color: #3b3f5c; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px; }
+.notif { width: 300px; background: #0d0e17; border: 0.5px solid rgba(255,255,255,0.09); border-radius: 12px; overflow: hidden; }
+.notif-accent { height: 2px; width: 100%; }
+.notif.urgent .notif-accent { background: #f7768e; }
+.notif.normal .notif-accent { background: #7aa2f7; }
+.notif.success .notif-accent { background: #9ece6a; }
+.notif.low .notif-accent { background: #1e2030; }
+.notif-inner { padding: 11px 13px; display: flex; gap: 10px; align-items: flex-start; }
+.notif-icon { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.notif-icon svg { width: 16px; height: 16px; fill: none; stroke-width: 1.5; }
+.notif-icon.red { background: rgba(247,118,142,0.12); } .notif-icon.red svg { stroke: #f7768e; }
+.notif-icon.blue { background: rgba(122,162,247,0.12); } .notif-icon.blue svg { stroke: #7aa2f7; }
+.notif-icon.green { background: rgba(158,206,106,0.12); } .notif-icon.green svg { stroke: #9ece6a; }
+.notif-icon.amber { background: rgba(224,175,104,0.12); } .notif-icon.amber svg { stroke: #e0af68; }
+.notif-icon.muted { background: rgba(255,255,255,0.05); } .notif-icon.muted svg { stroke: #565f89; }
+.notif-body { flex: 1; min-width: 0; }
+.notif-app { font-size: 10px; color: #565f89; margin-bottom: 2px; }
+.notif-summary { font-size: 12px; color: #c0caf5; font-weight: 500; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notif-body-text { font-size: 11px; color: #565f89; line-height: 1.4; }
+.notif-time { font-size: 10px; color: #3b3f5c; flex-shrink: 0; padding-top: 1px; }
+.notif-dismiss { margin-left: auto; width: 16px; height: 16px; border-radius: 50%; background: rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; margin-top: 1px; }
+.notif-dismiss svg { width: 8px; height: 8px; stroke: #565f89; fill: none; stroke-width: 2; }
+.notif-actions { display: flex; border-top: 0.5px solid rgba(255,255,255,0.06); }
+.notif-action { flex: 1; padding: 7px; font-size: 11px; color: #565f89; text-align: center; cursor: pointer; border-right: 0.5px solid rgba(255,255,255,0.06); }
+.notif-action:last-child { border-right: none; }
+.notif-action.primary { color: #7aa2f7; }
+.notif-action.danger { color: #f7768e; }
+.progress-wrap { padding: 0 13px 10px; }
+.progress-track { height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; }
+.progress-fill { height: 100%; border-radius: 2px; background: #9ece6a; }
+</style>
+
+<div class="scene">
+  <div class="scene-label">toasts</div>
+
+  <div class="notif urgent">
+    <div class="notif-accent"></div>
+    <div class="notif-inner">
+      <div class="notif-icon red">
+        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </div>
+      <div class="notif-body">
+        <div class="notif-app">system</div>
+        <div class="notif-summary">battery critically low</div>
+        <div class="notif-body-text">5% remaining. plug in now.</div>
+      </div>
+      <div class="notif-time">now</div>
+    </div>
+  </div>
+
+  <div class="notif normal">
+    <div class="notif-accent"></div>
+    <div class="notif-inner">
+      <div class="notif-icon blue">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div class="notif-body">
+        <div class="notif-app">discord</div>
+        <div class="notif-summary">mae — general</div>
+        <div class="notif-body-text">yo did you see the niri update</div>
+      </div>
+      <div class="notif-dismiss">
+        <svg viewBox="0 0 10 10"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>
+      </div>
+    </div>
+    <div class="notif-actions">
+      <div class="notif-action primary">reply</div>
+      <div class="notif-action">mark read</div>
+      <div class="notif-action">mute</div>
+    </div>
+  </div>
+
+  <div class="notif success">
+    <div class="notif-accent"></div>
+    <div class="notif-inner">
+      <div class="notif-icon green">
+        <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <div class="notif-body">
+        <div class="notif-app">pacman</div>
+        <div class="notif-summary">updates complete</div>
+        <div class="notif-body-text">47 packages upgraded successfully</div>
+      </div>
+      <div class="notif-time">2m</div>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-track"><div class="progress-fill" style="width:100%"></div></div>
+    </div>
+  </div>
+
+  <div class="notif low">
+    <div class="notif-accent"></div>
+    <div class="notif-inner">
+      <div class="notif-icon amber">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <div class="notif-body">
+        <div class="notif-app">calendar</div>
+        <div class="notif-summary">standup in 10 minutes</div>
+        <div class="notif-body-text">daily sync · 9:00 AM</div>
+      </div>
+      <div class="notif-time">8m</div>
+    </div>
+    <div class="notif-actions">
+      <div class="notif-action primary">open</div>
+      <div class="notif-action danger">dismiss</div>
+    </div>
+  </div>
+
+  <div class="notif low">
+    <div class="notif-accent"></div>
+    <div class="notif-inner">
+      <div class="notif-icon muted">
+        <svg viewBox="0 0 24 24"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>
+      </div>
+      <div class="notif-body">
+        <div class="notif-app">spotify</div>
+        <div class="notif-summary">now playing</div>
+        <div class="notif-body-text">Portishead — Roads</div>
+      </div>
+      <div class="notif-dismiss">
+        <svg viewBox="0 0 10 10"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>
+      </div>
+    </div>
+  </div>
+
+</div>

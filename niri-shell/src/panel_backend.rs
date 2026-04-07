@@ -79,6 +79,8 @@ pub struct WorkspaceState {
     pub names: Vec<String>,
     /// Which workspace indices have at least one open window.
     pub occupied: Vec<bool>,
+    /// Number of windows currently in the niri scratchpad (no workspace).
+    pub scratchpad_count: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -154,6 +156,11 @@ impl PanelState {
 
     // ── Workspace ──────────────────────────────────────────────────────────
 
+    /// Update the number of windows in the scratchpad.
+    pub fn update_scratchpad_count(&mut self, count: u32) {
+        self.workspaces.scratchpad_count = count;
+    }
+
     /// Replace the full workspace list and set the focused index.
     pub fn update_workspaces(
         &mut self,
@@ -164,7 +171,12 @@ impl PanelState {
         if current_index >= names.len() {
             return Err(WorkspaceError::InvalidIndex(current_index));
         }
-        self.workspaces = WorkspaceState { current_index, names, occupied };
+        self.workspaces = WorkspaceState {
+            current_index,
+            names,
+            occupied,
+            scratchpad_count: self.workspaces.scratchpad_count,
+        };
         Ok(())
     }
 
@@ -276,6 +288,15 @@ impl PanelState {
             return Err(NotificationError::NotFound(id));
         }
         Ok(())
+    }
+
+    /// Return notification counts per app name, for dock badge display.
+    pub fn notification_counts_by_app(&self) -> std::collections::HashMap<String, u32> {
+        let mut map = std::collections::HashMap::new();
+        for n in &self.notifications {
+            *map.entry(n.app.clone()).or_insert(0) += 1;
+        }
+        map
     }
 
     // ── Quick settings ─────────────────────────────────────────────────────

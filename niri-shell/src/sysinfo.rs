@@ -247,10 +247,12 @@ pub fn sample() -> Option<SysSnapshot> {
     SAMPLER.lock().unwrap().as_mut().map(|s| s.sample())
 }
 
-/// Adjust the default audio sink volume by `delta_pct` percent (positive = louder).
-pub fn set_volume_delta(delta_pct: i8) {
+/// Adjust the default audio sink volume by `delta_pct` percent and return the new level.
+/// Blocks briefly (~10 ms) to ensure the value is readable immediately after.
+pub fn set_volume_delta(delta_pct: i8) -> u8 {
     let arg = format!("{:+}%", delta_pct);
     let _ = std::process::Command::new("pactl")
         .args(["set-sink-volume", "@DEFAULT_SINK@", &arg])
-        .spawn();
+        .output();
+    read_volume()
 }

@@ -1,9 +1,11 @@
 // Backend logic for niri-launcher.
 // All business logic lives here — zero GTK4 imports.
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -472,6 +474,151 @@ fn parse_and_eval(expr: &str) -> Result<f64, String> {
     Ok(result)
 }
 
+// ── Recent files ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct RecentFile {
+    /// Display name (filename without path).
+    pub name: String,
+    /// Full URI (e.g. `file:///home/user/doc.pdf`).
+    pub uri: String,
+}
+
+/// Read up to `limit` entries from `~/.local/share/recently-used.xbel`.
+/// The file is simple XML; we parse it without pulling in an XML crate.
+pub fn load_recent_files(limit: usize) -> Vec<RecentFile> {
+    let path = {
+        let home = std::env::var_os("HOME").unwrap_or_default();
+        std::path::PathBuf::from(home).join(".local/share/recently-used.xbel")
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+
+    let mut results = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Each recent file looks like:
+        //   <bookmark href="file:///…" …>
+        if !trimmed.starts_with("<bookmark") {
+            continue;
+        }
+        let Some(uri) = attr_value(trimmed, "href") else { continue };
+        // Skip non-file URIs.
+        if !uri.starts_with("file://") {
+            continue;
+        }
+        let name = uri
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_owned();
+        let name = percent_decode(&name);
+        // MIME is on a child element; leave empty — we just need name + uri.
+        results.push(RecentFile { name, uri });
+        if results.len() >= limit {
+            break;
+        }
+    }
+    results
+}
+
+/// Extract the value of `key="value"` from an XML attribute string.
+fn attr_value(s: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}=\"");
+    let start = s.find(&needle)? + needle.len();
+    let rest = &s[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
+/// Decode `%XX` percent-encoded characters in a URI component.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                hex_val(bytes[i + 1]),
+                hex_val(bytes[i + 2]),
+            ) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+// ── Clipboard history (cliphist) ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ClipboardEntry {
+    /// Short display text (first 80 chars of the entry).
+    pub preview: String,
+    /// Raw cliphist identifier (the whole line, used to decode).
+    pub raw: String,
+}
+
+/// Run `cliphist list` and return up to `limit` entries.
+/// Returns an empty list if `cliphist` is not installed.
+pub fn load_clipboard_history(limit: usize) -> Vec<ClipboardEntry> {
+    let Ok(output) = std::process::Command::new("cliphist").arg("list").output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .take(limit)
+        .map(|line| {
+            let preview = line.chars().take(80).collect::<String>();
+            ClipboardEntry { preview, raw: line.to_owned() }
+        })
+        .collect()
+}
+
+/// Paste a previously selected clipboard entry: decode it and write to clipboard via `wl-copy`.
+pub fn paste_clipboard_entry(raw: &str) {
+    // cliphist decode <raw_line> | wl-copy
+    // We have to pipe: use std::process piping.
+    use std::process::{Command, Stdio};
+    let raw = raw.to_owned();
+    std::thread::spawn(move || {
+        let decode = Command::new("cliphist")
+            .arg("decode")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn();
+        let Ok(mut child) = decode else { return };
+        if let Some(stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = std::io::BufWriter::new(stdin).write_all(raw.as_bytes());
+        }
+        let Ok(decoded) = child.wait_with_output() else { return };
+        let _ = Command::new("wl-copy").stdin(Stdio::piped()).spawn().map(|mut wl| {
+            if let Some(mut s) = wl.stdin.take() {
+                use std::io::Write;
+                let _ = s.write_all(&decoded.stdout);
+            }
+        });
+    });
+}
+
 // ── App launcher ──────────────────────────────────────────────────────────────
 
 /// Spawn the application described by `entry` as a detached child process.
@@ -499,6 +646,88 @@ fn clean_exec(exec: &str) -> String {
         .filter(|tok| !tok.starts_with('%'))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+// ── Frecency ──────────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct FrecencyEntry {
+    count: u32,
+    last_used: u64,
+}
+
+fn frecency_path() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            PathBuf::from(home).join(".config")
+        });
+    base.join("niri-shell/frecency.json")
+}
+
+/// Persistent frecency store: tracks launch counts and last-used timestamps.
+pub struct FrecencyStore {
+    entries: HashMap<String, FrecencyEntry>,
+}
+
+impl FrecencyStore {
+    /// Load from `~/.config/niri-shell/frecency.json` (or return empty store on error).
+    pub fn load() -> Self {
+        let entries: HashMap<String, FrecencyEntry> = fs::read_to_string(frecency_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        Self { entries }
+    }
+
+    /// Record a successful launch of `app_id`, then save to disk.
+    pub fn record(&mut self, app_id: &str) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let e = self.entries.entry(app_id.to_owned()).or_default();
+        e.count += 1;
+        e.last_used = ts;
+        self.save();
+    }
+
+    fn save(&self) {
+        let path = frecency_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        match serde_json::to_string(&self.entries) {
+            Ok(json) => {
+                if let Err(e) = fs::write(&path, &json) {
+                    log::warn!("frecency: save failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("frecency: serialize failed: {e}"),
+        }
+    }
+
+    /// Blend frecency into `base_score`. More launches + more recent → higher bonus.
+    pub fn blend(&self, app_id: &str, base_score: f32) -> f32 {
+        let Some(e) = self.entries.get(app_id) else { return base_score };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        // Recency decay: halves every 24 h.
+        let hours_ago = now.saturating_sub(e.last_used) as f32 / 3600.0;
+        let frecency = (e.count as f32).ln_1p() * (1.0 / (1.0 + hours_ago / 24.0));
+        base_score + frecency * 0.5
+    }
+}
+
+/// Blend frecency into search results in-place, then re-sort descending by score.
+pub fn apply_frecency(results: &mut [SearchResult], store: &FrecencyStore) {
+    for r in results.iter_mut() {
+        r.score = store.blend(&r.entry.id, r.score);
+    }
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

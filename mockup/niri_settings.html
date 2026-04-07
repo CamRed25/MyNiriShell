@@ -1,0 +1,408 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+.app{background:#0d0e17;border:0.5px solid rgba(255,255,255,0.09);border-radius:14px;display:flex;font-family:var(--font-sans);overflow:hidden;min-height:620px;}
+.sidebar{width:180px;background:#080910;border-right:0.5px solid rgba(255,255,255,0.07);display:flex;flex-direction:column;flex-shrink:0;}
+.sb-header{padding:16px 14px 12px;border-bottom:0.5px solid rgba(255,255,255,0.07);}
+.sb-title{font-size:13px;color:#c0caf5;font-weight:500;}
+.sb-sub{font-size:10px;color:#3b3f5c;margin-top:1px;}
+.sb-section{padding:10px 8px 4px;}
+.sb-section-label{font-size:10px;color:#3b3f5c;text-transform:uppercase;letter-spacing:0.06em;padding:0 6px;margin-bottom:4px;}
+.sb-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;cursor:pointer;margin-bottom:1px;}
+.sb-item.active{background:rgba(122,162,247,0.12);}
+.sb-item svg{width:14px;height:14px;stroke:#565f89;fill:none;stroke-width:1.5;flex-shrink:0;}
+.sb-item.active svg{stroke:#7aa2f7;}
+.sb-item span{font-size:12px;color:#565f89;}
+.sb-item.active span{color:#c0caf5;}
+.sb-spacer{flex:1;}
+.sb-version{padding:10px 14px;font-size:10px;color:#3b3f5c;}
+
+.content{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;gap:16px;}
+.page-title{font-size:15px;color:#c0caf5;font-weight:500;margin-bottom:2px;}
+.page-sub{font-size:11px;color:#565f89;}
+
+.card{background:rgba(255,255,255,0.03);border:0.5px solid rgba(255,255,255,0.07);border-radius:10px;overflow:hidden;}
+.card-header{padding:10px 14px;border-bottom:0.5px solid rgba(255,255,255,0.06);display:flex;align-items:center;gap:8px;}
+.card-title{font-size:12px;color:#c0caf5;font-weight:500;flex:1;}
+.card-action{font-size:11px;color:#7aa2f7;cursor:pointer;}
+
+.row{display:flex;align-items:center;gap:10px;padding:9px 14px;border-top:0.5px solid rgba(255,255,255,0.05);}
+.row:first-of-type{border-top:none;}
+.row-label{font-size:12px;color:#c0caf5;flex:1;}
+.row-sub{font-size:10px;color:#565f89;margin-top:1px;}
+.row-label-wrap{flex:1;}
+
+.toggle{width:32px;height:18px;border-radius:9px;background:rgba(255,255,255,0.08);border:0.5px solid rgba(255,255,255,0.1);position:relative;cursor:pointer;flex-shrink:0;}
+.toggle.on{background:rgba(122,162,247,0.3);border-color:rgba(122,162,247,0.4);}
+.toggle-thumb{width:12px;height:12px;border-radius:50%;background:#565f89;position:absolute;top:2px;left:2px;transition:left 0.15s;}
+.toggle.on .toggle-thumb{left:16px;background:#7aa2f7;}
+
+.kbd-row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:0.5px solid rgba(255,255,255,0.05);}
+.kbd-action{font-size:12px;color:#c0caf5;flex:1;}
+.kbd-conflict{font-size:10px;color:#f7768e;margin-top:1px;}
+.kbd-combo{display:flex;gap:3px;align-items:center;}
+.key{font-size:10px;color:#c0caf5;background:rgba(255,255,255,0.08);border:0.5px solid rgba(255,255,255,0.12);border-radius:4px;padding:2px 6px;font-family:var(--font-mono);}
+.key.accent{background:rgba(122,162,247,0.12);border-color:rgba(122,162,247,0.25);color:#7aa2f7;}
+.kbd-recording{display:flex;align-items:center;gap:6px;background:rgba(122,162,247,0.08);border:0.5px solid rgba(122,162,247,0.25);border-radius:6px;padding:4px 8px;}
+.rec-dot{width:6px;height:6px;border-radius:50%;background:#f7768e;animation:pulse 1s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.rec-text{font-size:11px;color:#7aa2f7;font-family:var(--font-mono);}
+
+.table-header{display:grid;grid-template-columns:1fr 1fr 80px 60px;gap:8px;padding:7px 14px;background:rgba(255,255,255,0.02);}
+.th{font-size:10px;color:#3b3f5c;text-transform:uppercase;letter-spacing:0.05em;}
+.table-row{display:grid;grid-template-columns:1fr 1fr 80px 60px;gap:8px;padding:8px 14px;border-top:0.5px solid rgba(255,255,255,0.05);align-items:center;}
+.td{font-size:11px;color:#c0caf5;font-family:var(--font-mono);}
+.td.muted{color:#565f89;}
+.badge{font-size:10px;padding:2px 7px;border-radius:4px;font-family:var(--font-sans);}
+.badge.float{background:rgba(122,162,247,0.12);color:#7aa2f7;}
+.badge.tile{background:rgba(158,206,106,0.12);color:#9ece6a;}
+.badge.add-btn{background:rgba(255,255,255,0.05);color:#565f89;cursor:pointer;border:0.5px solid rgba(255,255,255,0.08);}
+
+.monitor-canvas{padding:14px;display:flex;gap:10px;align-items:flex-end;justify-content:center;}
+.monitor-block{border:0.5px solid rgba(122,162,247,0.3);border-radius:6px;background:rgba(122,162,247,0.07);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:grab;position:relative;}
+.monitor-block.primary{border-color:rgba(122,162,247,0.5);background:rgba(122,162,247,0.12);}
+.mon-name{font-size:10px;color:#7aa2f7;font-weight:500;}
+.mon-res{font-size:9px;color:#3b3f5c;}
+.mon-primary-badge{position:absolute;top:4px;right:4px;font-size:8px;background:rgba(122,162,247,0.2);color:#7aa2f7;border-radius:3px;padding:1px 4px;}
+.mon-add{border:0.5px dashed rgba(255,255,255,0.1);border-radius:6px;width:60px;height:44px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+.mon-add svg{width:14px;height:14px;stroke:#3b3f5c;fill:none;stroke-width:1.5;}
+
+.token-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:14px;}
+.token-item{display:flex;flex-direction:column;gap:6px;}
+.token-swatch-row{display:flex;align-items:center;gap:8px;}
+.token-swatch{width:28px;height:28px;border-radius:6px;border:0.5px solid rgba(255,255,255,0.1);flex-shrink:0;cursor:pointer;}
+.token-hex{font-size:10px;color:#565f89;font-family:var(--font-mono);}
+.token-name{font-size:11px;color:#c0caf5;}
+.preview-bar{margin:0 14px 14px;background:#13141f;border:0.5px solid rgba(255,255,255,0.07);border-radius:8px;padding:8px 12px;display:flex;align-items:center;gap:10px;}
+.preview-ws{display:flex;gap:4px;}
+.preview-dot{width:6px;height:6px;border-radius:50%;}
+.preview-track{flex:1;height:3px;border-radius:2px;}
+.preview-time{font-size:11px;font-weight:500;}
+
+.tools-group-label{font-size:10px;color:#3b3f5c;text-transform:uppercase;letter-spacing:0.06em;padding:10px 14px 5px;}
+.tool-row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:0.5px solid rgba(255,255,255,0.05);}
+.tool-icon{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.tool-icon svg{width:14px;height:14px;fill:none;stroke-width:1.5;}
+.tool-name{font-size:12px;color:#c0caf5;flex:1;}
+.tool-sub{font-size:10px;color:#565f89;}
+.not-installed{font-size:10px;color:#565f89;background:rgba(255,255,255,0.04);border:0.5px solid rgba(255,255,255,0.08);border-radius:4px;padding:2px 7px;}
+</style>
+
+<div class="app">
+  <div class="sidebar">
+    <div class="sb-header">
+      <div class="sb-title">settings</div>
+      <div class="sb-sub">niri-shell</div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-section-label">niri</div>
+      <div class="sb-item active">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>keybindings</span>
+      </div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        <span>window rules</span>
+      </div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/></svg>
+        <span>outputs</span>
+      </div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <span>theme</span>
+      </div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        <span>behaviour</span>
+      </div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-section-label">tools</div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        <span>software</span>
+      </div>
+    </div>
+
+    <div class="sb-spacer"></div>
+    <div class="sb-version">v0.1.0 · niri 0.1.9</div>
+  </div>
+
+  <div class="content">
+    <div>
+      <div class="page-title">keybindings</div>
+      <div class="page-sub">click a binding to re-record · conflicts shown in red</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">compositor</div>
+        <div class="card-action">+ add</div>
+      </div>
+      <div class="kbd-row">
+        <div style="flex:1">
+          <div class="kbd-action">quit niri</div>
+        </div>
+        <div class="kbd-combo">
+          <div class="key accent">Super</div><div class="key">Shift</div><div class="key">E</div>
+        </div>
+      </div>
+      <div class="kbd-row">
+        <div style="flex:1">
+          <div class="kbd-action">focus left</div>
+        </div>
+        <div class="kbd-combo">
+          <div class="key accent">Super</div><div class="key">H</div>
+        </div>
+      </div>
+      <div class="kbd-row">
+        <div style="flex:1">
+          <div class="kbd-action">focus right</div>
+        </div>
+        <div class="kbd-combo">
+          <div class="key accent">Super</div><div class="key">L</div>
+        </div>
+      </div>
+      <div class="kbd-row">
+        <div style="flex:1">
+          <div class="kbd-action">spawn terminal</div>
+        </div>
+        <div class="kbd-recording">
+          <div class="rec-dot"></div>
+          <div class="rec-text">Super + T</div>
+        </div>
+      </div>
+      <div class="kbd-row">
+        <div style="flex:1">
+          <div class="kbd-action">open launcher</div>
+          <div class="kbd-conflict">conflicts with screenshot region</div>
+        </div>
+        <div class="kbd-combo">
+          <div class="key accent">Super</div><div class="key" style="border-color:rgba(247,118,142,0.3);color:#f7768e;">Space</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">window rules</div>
+        <div class="card-action">+ add rule</div>
+      </div>
+      <div class="table-header">
+        <div class="th">app id</div>
+        <div class="th">title match</div>
+        <div class="th">open on</div>
+        <div class="th">layout</div>
+      </div>
+      <div class="table-row">
+        <div class="td">firefox</div>
+        <div class="td muted">any</div>
+        <div class="td"><span class="badge float">ws 2</span></div>
+        <div class="td muted">—</div>
+      </div>
+      <div class="table-row">
+        <div class="td">org.gnome.Nautilus</div>
+        <div class="td muted">any</div>
+        <div class="td muted">—</div>
+        <div class="td"><span class="badge tile">tile</span></div>
+      </div>
+      <div class="table-row">
+        <div class="td">discord</div>
+        <div class="td muted">any</div>
+        <div class="td"><span class="badge float">ws 3</span></div>
+        <div class="td muted">—</div>
+      </div>
+      <div class="table-row">
+        <div class="td muted" style="grid-column:1/-1;text-align:center;cursor:pointer;">
+          <span class="badge add-btn">+ add row</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">outputs</div>
+        <div class="card-action">detect</div>
+      </div>
+      <div class="monitor-canvas">
+        <div class="monitor-block primary" style="width:110px;height:72px;">
+          <div class="mon-primary-badge">primary</div>
+          <div class="mon-name">DP-1</div>
+          <div class="mon-res">2560×1440</div>
+        </div>
+        <div class="monitor-block" style="width:80px;height:56px;">
+          <div class="mon-name">HDMI-A-1</div>
+          <div class="mon-res">1920×1080</div>
+        </div>
+        <div class="mon-add">
+          <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label-wrap">
+          <div class="row-label">scale</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="width:80px;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;position:relative;">
+            <div style="width:50%;height:100%;background:#7aa2f7;border-radius:2px;"></div>
+            <div style="width:10px;height:10px;border-radius:50%;background:#c0caf5;border:2px solid #0d0e17;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);"></div>
+          </div>
+          <span style="font-size:11px;color:#565f89;min-width:24px;">1.5×</span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label">refresh rate</div>
+        <div style="font-size:11px;color:#7aa2f7;background:rgba(122,162,247,0.1);border:0.5px solid rgba(122,162,247,0.2);border-radius:5px;padding:3px 8px;">144 Hz</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">theme tokens</div>
+      </div>
+      <div class="token-grid">
+        <div class="token-item">
+          <div class="token-name">accent</div>
+          <div class="token-swatch-row">
+            <div class="token-swatch" style="background:#7aa2f7;"></div>
+            <div class="token-hex">#7aa2f7</div>
+          </div>
+        </div>
+        <div class="token-item">
+          <div class="token-name">surface</div>
+          <div class="token-swatch-row">
+            <div class="token-swatch" style="background:#0d0e17;"></div>
+            <div class="token-hex">#0d0e17</div>
+          </div>
+        </div>
+        <div class="token-item">
+          <div class="token-name">text</div>
+          <div class="token-swatch-row">
+            <div class="token-swatch" style="background:#c0caf5;"></div>
+            <div class="token-hex">#c0caf5</div>
+          </div>
+        </div>
+      </div>
+      <div style="padding:0 14px 6px;font-size:10px;color:#3b3f5c;">live preview</div>
+      <div class="preview-bar">
+        <div class="preview-ws">
+          <div class="preview-dot" style="background:#7aa2f7;"></div>
+          <div class="preview-dot" style="background:rgba(122,162,247,0.3);"></div>
+          <div class="preview-dot" style="background:rgba(122,162,247,0.3);"></div>
+        </div>
+        <div style="flex:1;font-size:10px;color:#c0caf5;opacity:0.5;">Roads — Portishead</div>
+        <div class="preview-time" style="color:#c0caf5;">14:32</div>
+        <div style="width:24px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;">
+          <div style="width:70%;height:100%;background:#7aa2f7;border-radius:2px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">shell behaviour</div></div>
+      <div class="row">
+        <div class="row-label-wrap">
+          <div class="row-label">dock autohide</div>
+          <div class="row-sub">hide dock when a window overlaps</div>
+        </div>
+        <div class="toggle on"><div class="toggle-thumb"></div></div>
+      </div>
+      <div class="row">
+        <div class="row-label-wrap">
+          <div class="row-label">show workspace indicator</div>
+        </div>
+        <div class="toggle on"><div class="toggle-thumb"></div></div>
+      </div>
+      <div class="row">
+        <div class="row-label-wrap">
+          <div class="row-label">show media controls</div>
+        </div>
+        <div class="toggle on"><div class="toggle-thumb"></div></div>
+      </div>
+      <div class="row">
+        <div class="row-label-wrap">
+          <div class="row-label">show network speeds</div>
+        </div>
+        <div class="toggle on"><div class="toggle-thumb"></div></div>
+      </div>
+      <div class="row">
+        <div class="row-label-wrap">
+          <div class="row-label">launcher show recent files</div>
+        </div>
+        <div class="toggle"><div class="toggle-thumb"></div></div>
+      </div>
+      <div class="row">
+        <div class="row-label-wrap">
+          <div class="row-label">notification sounds</div>
+        </div>
+        <div class="toggle"><div class="toggle-thumb"></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">tools &amp; software</div></div>
+      <div class="tools-group-label">installed</div>
+      <div class="tool-row">
+        <div class="tool-icon" style="background:rgba(224,175,104,0.12);">
+          <svg viewBox="0 0 24 24" stroke="#e0af68"><circle cx="12" cy="12" r="4"/><path d="M12 3v1M12 20v1M4.22 4.22l.71.71M19.07 4.22l-.71.71M3 12h1M20 12h1"/></svg>
+        </div>
+        <div>
+          <div class="tool-name">gammastep</div>
+          <div class="tool-sub">night light · active</div>
+        </div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-icon" style="background:rgba(122,162,247,0.12);">
+          <svg viewBox="0 0 24 24" stroke="#7aa2f7"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div>
+          <div class="tool-name">hyprlock</div>
+          <div class="tool-sub">lock screen</div>
+        </div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-icon" style="background:rgba(158,206,106,0.12);">
+          <svg viewBox="0 0 24 24" stroke="#9ece6a"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div>
+          <div class="tool-name">swayidle</div>
+          <div class="tool-sub">idle management · active</div>
+        </div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-icon" style="background:rgba(125,207,255,0.1);">
+          <svg viewBox="0 0 24 24" stroke="#7dcfff"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div>
+          <div class="tool-name">cliphist</div>
+          <div class="tool-sub">clipboard history · active</div>
+        </div>
+      </div>
+      <div class="tools-group-label">not installed</div>
+      <div class="tool-row">
+        <div class="tool-icon" style="background:rgba(255,255,255,0.04);">
+          <svg viewBox="0 0 24 24" stroke="#3b3f5c"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/></svg>
+        </div>
+        <div style="flex:1;">
+          <div class="tool-name" style="color:#565f89;">wdisplays</div>
+          <div class="tool-sub">display manager</div>
+        </div>
+        <div class="not-installed">not installed</div>
+      </div>
+      <div class="tool-row">
+        <div class="tool-icon" style="background:rgba(255,255,255,0.04);">
+          <svg viewBox="0 0 24 24" stroke="#3b3f5c"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </div>
+        <div style="flex:1;">
+          <div class="tool-name" style="color:#565f89;">mako</div>
+          <div class="tool-sub">notification daemon</div>
+        </div>
+        <div class="not-installed">not installed</div>
+      </div>
+    </div>
+
+  </div>
+</div>

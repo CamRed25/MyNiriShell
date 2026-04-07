@@ -13,6 +13,7 @@ Follow these rules for all UI code and design:
 - Minimize dependencies: use only essential UI libraries.
 - Review all UI changes for clarity, usability, and visual consistency before merging.
 - Test UI for responsiveness and cross-platform compatibility.
+- All UI code must be in `*_ui.rs` files, with zero business logic or non-UI imports.
 
 Checklist for every UI change:
 - [ ] Is the UI minimal and easy to use?
@@ -21,3 +22,4 @@ Checklist for every UI change:
 - [ ] Is documentation updated?
 - [ ] Are dependencies justified?
 - [ ] Has the UI been reviewed and tested?
+- [ ] Is all UI code confined to `*_ui.rs`?

@@ -88,8 +88,10 @@ impl ShellState {
     }
 
     fn on_windows(&self, windows: Vec<Window>) {
+        let scratchpad = windows.iter().filter(|w| w.workspace_id.is_none()).count() as u32;
         let active: Vec<DockItem> = windows.iter().map(window_to_dock_item).collect();
         self.dock.borrow_mut().set_active_windows(active);
+        self.panel.borrow_mut().update_scratchpad_count(scratchpad);
     }
 
     fn on_window_changed(&self, window: Window) {
@@ -101,14 +103,20 @@ impl ShellState {
         } else {
             active.push(item);
         }
+        let scratchpad = active.iter().filter(|i| i.workspace_id == 0).count() as u32;
         dock.set_active_windows(active);
+        drop(dock);
+        self.panel.borrow_mut().update_scratchpad_count(scratchpad);
     }
 
     fn on_window_closed(&self, id: u64) {
         let mut dock = self.dock.borrow_mut();
         let active: Vec<DockItem> =
             dock.active.iter().filter(|a| a.niri_id != id).cloned().collect();
+        let scratchpad = active.iter().filter(|i| i.workspace_id == 0).count() as u32;
         dock.set_active_windows(active);
+        drop(dock);
+        self.panel.borrow_mut().update_scratchpad_count(scratchpad);
     }
 
     fn on_focus_changed(&self, focused_id: Option<u64>) {

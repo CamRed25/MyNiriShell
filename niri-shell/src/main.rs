@@ -1,3 +1,5 @@
+mod polkit_agent;
+mod polkit_ui;
 // Entry point for the niri unified shell.
 
 mod dock_backend;
@@ -7,8 +9,16 @@ mod ipc;
 mod launcher_backend;
 mod launcher_ui;
 mod media;
+mod notification_daemon;
+mod notification_ui;
+mod osd_ui;
 mod panel_backend;
 mod panel_ui;
+mod power_backend;
+mod power_ui;
+mod quick_settings_backend;
+mod quick_settings_ui;
+mod screenshot_ui;
 mod shell;
 mod state;
 mod sysinfo;

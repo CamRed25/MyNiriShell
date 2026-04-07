@@ -1,0 +1,114 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.scene { background: #1a1b26; border-radius: 14px; padding: 20px; font-family: var(--font-sans); display: flex; flex-direction: column; gap: 10px; }
+.scene-label { font-size: 10px; color: #3b3f5c; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px; }
+.center-panel { width: 280px; background: #0d0e17; border: 0.5px solid rgba(255,255,255,0.1); border-radius: 14px; overflow: hidden; }
+.cp-header { padding: 12px 14px 10px; border-bottom: 0.5px solid rgba(255,255,255,0.07); display: flex; align-items: center; gap: 8px; }
+.cp-title { font-size: 13px; color: #c0caf5; font-weight: 500; flex: 1; }
+.cp-badge { font-size: 10px; background: rgba(122,162,247,0.15); color: #7aa2f7; border-radius: 10px; padding: 2px 7px; }
+.cp-dnd { display: flex; align-items: center; gap: 5px; background: rgba(255,255,255,0.04); border: 0.5px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+.cp-dnd svg { width: 11px; height: 11px; stroke: #565f89; fill: none; stroke-width: 1.5; }
+.cp-dnd span { font-size: 10px; color: #565f89; }
+.cp-clear { font-size: 10px; color: #3b3f5c; cursor: pointer; }
+.cp-group-label { font-size: 10px; color: #3b3f5c; text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 14px 5px; }
+.cp-item { display: flex; align-items: center; gap: 9px; padding: 8px 14px; border-top: 0.5px solid rgba(255,255,255,0.05); cursor: pointer; }
+.cp-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.cp-item-icon { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.cp-item-icon svg { width: 12px; height: 12px; fill: none; stroke-width: 1.5; }
+.cp-item-text { flex: 1; min-width: 0; }
+.cp-item-summary { font-size: 11px; color: #c0caf5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-item-app { font-size: 10px; color: #565f89; }
+.cp-item-time { font-size: 10px; color: #3b3f5c; flex-shrink: 0; }
+.cp-footer { border-top: 0.5px solid rgba(255,255,255,0.07); padding: 8px 14px; text-align: center; font-size: 11px; color: #3b3f5c; cursor: pointer; }
+</style>
+
+<div class="scene">
+  <div class="scene-label">notification center</div>
+
+  <div class="center-panel">
+    <div class="cp-header">
+      <div class="cp-title">notifications</div>
+      <div class="cp-badge">6</div>
+      <div class="cp-dnd">
+        <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+        <span>dnd</span>
+      </div>
+      <div class="cp-clear">clear all</div>
+    </div>
+
+    <div class="cp-group-label">discord</div>
+    <div class="cp-item">
+      <div class="cp-dot" style="background:#7aa2f7"></div>
+      <div class="cp-item-icon" style="background:rgba(122,162,247,0.1)">
+        <svg viewBox="0 0 24 24" stroke="#7aa2f7"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div class="cp-item-text">
+        <div class="cp-item-summary">yo did you see the niri update</div>
+        <div class="cp-item-app">mae · general</div>
+      </div>
+      <div class="cp-item-time">2m</div>
+    </div>
+    <div class="cp-item">
+      <div class="cp-dot" style="background:#7aa2f7"></div>
+      <div class="cp-item-icon" style="background:rgba(122,162,247,0.1)">
+        <svg viewBox="0 0 24 24" stroke="#7aa2f7"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div class="cp-item-text">
+        <div class="cp-item-summary">lmk when you're free</div>
+        <div class="cp-item-app">kai · dms</div>
+      </div>
+      <div class="cp-item-time">14m</div>
+    </div>
+
+    <div class="cp-group-label">system</div>
+    <div class="cp-item">
+      <div class="cp-dot" style="background:#f7768e"></div>
+      <div class="cp-item-icon" style="background:rgba(247,118,142,0.1)">
+        <svg viewBox="0 0 24 24" stroke="#f7768e"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </div>
+      <div class="cp-item-text">
+        <div class="cp-item-summary">battery critically low</div>
+        <div class="cp-item-app">system</div>
+      </div>
+      <div class="cp-item-time">now</div>
+    </div>
+    <div class="cp-item">
+      <div class="cp-dot" style="background:#9ece6a"></div>
+      <div class="cp-item-icon" style="background:rgba(158,206,106,0.1)">
+        <svg viewBox="0 0 24 24" stroke="#9ece6a"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <div class="cp-item-text">
+        <div class="cp-item-summary">updates complete</div>
+        <div class="cp-item-app">pacman · 47 packages</div>
+      </div>
+      <div class="cp-item-time">2m</div>
+    </div>
+
+    <div class="cp-group-label">calendar</div>
+    <div class="cp-item">
+      <div class="cp-dot" style="background:#e0af68"></div>
+      <div class="cp-item-icon" style="background:rgba(224,175,104,0.1)">
+        <svg viewBox="0 0 24 24" stroke="#e0af68"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <div class="cp-item-text">
+        <div class="cp-item-summary">standup in 10 minutes</div>
+        <div class="cp-item-app">calendar · 9:00 AM</div>
+      </div>
+      <div class="cp-item-time">8m</div>
+    </div>
+    <div class="cp-item">
+      <div class="cp-dot" style="background:#565f89"></div>
+      <div class="cp-item-icon" style="background:rgba(255,255,255,0.05)">
+        <svg viewBox="0 0 24 24" stroke="#565f89"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </div>
+      <div class="cp-item-text">
+        <div class="cp-item-summary">team retro tomorrow</div>
+        <div class="cp-item-app">calendar · 2:00 PM</div>
+      </div>
+      <div class="cp-item-time">1h</div>
+    </div>
+
+    <div class="cp-footer">show older</div>
+  </div>
+</div>

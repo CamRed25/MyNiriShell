@@ -1,0 +1,16 @@
+[Unit]
+Description=niri shell (panel, dock, launcher)
+Documentation=https://github.com/CamRed25/MyNiriShell
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/niri-shell
+Restart=on-failure
+RestartSec=2s
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=graphical-session.target

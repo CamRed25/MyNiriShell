@@ -3,7 +3,9 @@
 // Public types are forward-declared for future IPC/D-Bus integration.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -127,17 +129,66 @@ fn save_pins_to_disk(pins: &[DockItem]) {
 pub struct DockState {
     pub pinned: Vec<DockItem>,
     pub active: Vec<DockItem>,
+    /// Recently-closed windows shown as fading ghost icons (cleared after 800 ms).
+    pub ghosts: Vec<GhostItem>,
+    /// Notification counts keyed by app id, updated from the daemon drain loop.
+    pub notif_counts: HashMap<String, u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GhostItem {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub closed_at: Instant,
+}
+
+impl GhostItem {
+    pub fn opacity(&self) -> f64 {
+        let elapsed = self.closed_at.elapsed().as_secs_f64();
+        (1.0 - elapsed / 0.8).clamp(0.0, 0.55)
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.closed_at.elapsed() >= Duration::from_millis(800)
+    }
 }
 
 impl DockState {
     pub fn new() -> Self {
         let pinned = load_pins_from_disk().unwrap_or_else(default_pins);
-        Self { pinned, active: Vec::new() }
+        Self { pinned, active: Vec::new(), ghosts: Vec::new(), notif_counts: HashMap::new() }
+    }
+
+    /// Update the per-app notification badge counts.
+    pub fn set_notif_counts(&mut self, counts: HashMap<String, u32>) {
+        self.notif_counts = counts;
     }
 
     /// Replace the active-window list with a fresh snapshot from the compositor.
+    /// Any window that was in `active` but is absent from `windows` becomes a ghost.
     pub fn set_active_windows(&mut self, windows: Vec<DockItem>) {
+        for old in &self.active {
+            if !windows.iter().any(|w| w.niri_id == old.niri_id) {
+                // Don't ghost pinned apps or items already ghosted.
+                if !self.pinned.iter().any(|p| p.id == old.id)
+                    && !self.ghosts.iter().any(|g| g.id == old.id)
+                {
+                    self.ghosts.push(GhostItem {
+                        id: old.id.clone(),
+                        name: old.name.clone(),
+                        icon: old.icon.clone(),
+                        closed_at: Instant::now(),
+                    });
+                }
+            }
+        }
         self.active = windows;
+    }
+
+    /// Remove ghosts that have completed their fade (≥ 800 ms old).
+    pub fn prune_ghosts(&mut self) {
+        self.ghosts.retain(|g| !g.is_expired());
     }
 
     /// Reorder a pinned item from `from` index to `to` index (drag-and-drop support).

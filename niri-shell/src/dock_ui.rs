@@ -76,11 +76,9 @@ window {
     margin: 0 4px;
 }
 
-.dock-ws-label {
-    font-size: 8px;
-    color: #565f89;
-    padding: 0 2px;
-    margin-bottom: 1px;
+.dock-ghost {
+    opacity: 0.45;
+    filter: grayscale(0.6);
 }
 ";
 
@@ -148,6 +146,7 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
     bar.append(&pinned_section);
 
     // Poll every 500 ms to reflect open-window and focus changes.
+    let state_for_ghost = Rc::clone(&state);
     let active_weak = active_section.downgrade();
     let pinned_weak = pinned_section.downgrade();
     let sep_weak = sep.downgrade();
@@ -155,10 +154,28 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
         let (Some(active), Some(pinned)) = (active_weak.upgrade(), pinned_weak.upgrade()) else {
             return glib::ControlFlow::Break;
         };
+        // Prune expired ghosts before re-rendering.
+        state.borrow_mut().prune_ghosts();
         refresh_active_section(&active, &state);
         refresh_pinned_section(&pinned, &state);
         if let Some(s) = sep_weak.upgrade() {
-            s.set_visible(!state.borrow().active.is_empty());
+            let dock = state.borrow();
+            s.set_visible(!dock.active.is_empty() || !dock.ghosts.is_empty());
+        }
+        glib::ControlFlow::Continue
+    });
+
+    // Fast ghost-fade timer (80 ms) — only redraws active section when ghosts exist.
+    let active_fade = active_section.downgrade();
+    let state_fade = Rc::clone(&state_for_ghost);
+    glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+        let Some(active) = active_fade.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let has_ghosts = !state_fade.borrow().ghosts.is_empty();
+        if has_ghosts {
+            state_fade.borrow_mut().prune_ghosts();
+            refresh_active_section(&active, &state_fade);
         }
         glib::ControlFlow::Continue
     });
@@ -167,12 +184,21 @@ fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {
 }
 
 /// Encodes the full visible state of the active section as a string key.
-fn active_section_key(items: &[crate::dock_backend::DockItem]) -> String {
-    items
+fn active_section_key(items: &[crate::dock_backend::DockItem], ghosts: &[crate::dock_backend::GhostItem]) -> String {
+    let mut key = items
         .iter()
         .map(|i| format!("{}:{}:{}", i.id, i.is_active as u8, i.workspace_id))
         .collect::<Vec<_>>()
-        .join("|")
+        .join("|");
+    if !ghosts.is_empty() {
+        key.push_str("~ghosts:");
+        for g in ghosts {
+            // Include approximate opacity bucket (0..10) so we redraw during fade.
+            let bucket = (g.opacity() * 10.0) as u8;
+            key.push_str(&format!("{}:{bucket}", g.id));
+        }
+    }
+    key
 }
 
 /// Encodes pinned-section running/focused state as a string key.
@@ -181,21 +207,35 @@ fn pinned_section_key(state: &Rc<RefCell<DockState>>) -> String {
     let focused = dock.active.iter().find(|a| a.is_active).map(|a| a.id.clone());
     let active_ids: std::collections::HashSet<&str> =
         dock.active.iter().map(|a| a.id.as_str()).collect();
-    dock.pinned
+    let mut key = dock.pinned
         .iter()
         .map(|p| {
             let running = active_ids.contains(p.id.as_str());
             let focused = focused.as_deref() == Some(p.id.as_str());
-            format!("{}:{}:{}", p.id, running as u8, focused as u8)
+            let badge = dock.notif_counts.get(&p.id).copied().unwrap_or(0);
+            format!("{}:{}:{}:{badge}", p.id, running as u8, focused as u8)
         })
         .collect::<Vec<_>>()
-        .join("|")
+        .join("|");
+    // Append a summary of active-section badge counts so pinned re-renders on change.
+    if !dock.notif_counts.is_empty() {
+        key.push_str("~nc:");
+        let mut nc: Vec<_> = dock.notif_counts.iter().collect();
+        nc.sort_by_key(|(k, _)| k.as_str());
+        for (k, v) in nc {
+            key.push_str(&format!("{k}:{v}|"));
+        }
+    }
+    key
 }
 
 fn refresh_active_section(section: &GtkBox, state: &Rc<RefCell<DockState>>) {
-    let items = state.borrow().active.clone();
-    let key = active_section_key(&items);
-    // Widget name stores the last-rendered key; skip rebuild when unchanged.
+    let dock = state.borrow();
+    let items = dock.active.clone();
+    let ghosts = dock.ghosts.clone();
+    let notif_counts = dock.notif_counts.clone();
+    drop(dock);
+    let key = active_section_key(&items, &ghosts);
     if section.widget_name().as_str() == key {
         return;
     }
@@ -226,16 +266,25 @@ fn refresh_active_section(section: &GtkBox, state: &Rc<RefCell<DockState>>) {
             col.append(&lbl);
             let row_box = GtkBox::new(Orientation::Horizontal, 4);
             for item in group_items {
-                row_box.append(&build_dock_item(item, None, Rc::clone(state)));
+                let badge = notif_counts.get(&item.id).copied();
+                row_box.append(&build_dock_item(item, badge, Rc::clone(state)));
             }
             col.append(&row_box);
             section.append(&col);
         } else {
             for item in group_items {
-                section.append(&build_dock_item(item, None, Rc::clone(state)));
+                let badge = notif_counts.get(&item.id).copied();
+                section.append(&build_dock_item(item, badge, Rc::clone(state)));
             }
         }
     }
+
+    // Render ghost icons after active windows.
+    for ghost in &ghosts {
+        let ghost_box = build_ghost_item(ghost);
+        section.append(&ghost_box);
+    }
+
     section.set_widget_name(&key);
 }
 
@@ -278,11 +327,16 @@ fn populate_pinned_section(section: &GtkBox, state: Rc<RefCell<DockState>>) {
     let items: Vec<DockItem> = state.borrow().pinned.clone();
 
     for (idx, item) in items.iter().enumerate() {
-        let running = state.borrow().active.iter().any(|a| a.id == item.id);
+        let (running, badge) = {
+            let dock = state.borrow();
+            let r = dock.active.iter().any(|a| a.id == item.id);
+            let b = dock.notif_counts.get(&item.id).copied();
+            (r, b)
+        };
         let mut display_item = item.clone();
         display_item.is_active = running;
 
-        let item_box = build_dock_item(&display_item, None, state.clone());
+        let item_box = build_dock_item(&display_item, badge, state.clone());
 
         // Drag source: broadcast own index when a drag starts.
         let drag_source = gtk4::DragSource::new();
@@ -318,6 +372,31 @@ fn populate_pinned_section(section: &GtkBox, state: Rc<RefCell<DockState>>) {
 
         section.append(&item_box);
     }
+}
+
+fn build_ghost_item(ghost: &crate::dock_backend::GhostItem) -> GtkBox {
+    let item_box = GtkBox::new(Orientation::Vertical, 3);
+    item_box.set_halign(gtk4::Align::Center);
+    item_box.set_opacity(ghost.opacity());
+    item_box.add_css_class("dock-ghost");
+
+    let btn = gtk4::Button::new();
+    btn.add_css_class("dock-icon-btn");
+    let icon = Image::from_icon_name(&resolve_icon(&ghost.icon));
+    icon.set_pixel_size(22);
+    btn.set_child(Some(&icon));
+    btn.set_tooltip_text(Some(&ghost.name));
+    btn.set_sensitive(false);
+    item_box.append(&btn);
+
+    // Empty dot placeholder to keep vertical alignment consistent.
+    let dot = GtkBox::new(Orientation::Horizontal, 0);
+    dot.set_halign(gtk4::Align::Center);
+    dot.set_size_request(4, 4);
+    dot.add_css_class("dock-dot-empty");
+    item_box.append(&dot);
+
+    item_box
 }
 
 fn build_dock_item(

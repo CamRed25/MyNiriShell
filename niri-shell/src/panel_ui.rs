@@ -7,8 +7,7 @@ use gtk4::{
     glib,
     prelude::*,
     Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, EventControllerScroll,
-    EventControllerScrollFlags, Image, Label, ListBox, ListBoxRow, Orientation, Popover,
-    ProgressBar, ScrolledWindow, Separator,
+    EventControllerScrollFlags, Image, Label, Orientation, ProgressBar, Separator,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
@@ -42,6 +41,16 @@ window {
 }
 .ws-dot-active   { background: #7aa2f7; }
 .ws-dot-occupied { background: #3d59a1; }
+
+.scratch-badge {
+    font-size: 8px;
+    color: #bb9af7;
+    background: rgba(187, 154, 247, 0.15);
+    border: 1px solid rgba(187, 154, 247, 0.30);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 4px;
+}
 
 .media-btn {
     min-width: 16px;
@@ -93,31 +102,53 @@ progressbar.mem-bar progress { background: #bb9af7; border-radius: 3px; }
 }
 .icon-btn:hover { background: rgba(255, 255, 255, 0.12); }
 
-.qs-row   { padding: 4px 0; }
-.qs-title { font-size: 12px; font-weight: bold; color: #c0caf5; margin-bottom: 6px; }
-.qs-label { font-size: 12px; color: #c0caf5; }
 
-.notif-row     { padding: 6px 4px; }
-.notif-app     { font-size: 10px; color: #565f89; }
-.notif-summary { font-size: 12px; color: #c0caf5; font-weight: bold; }
-.notif-body    { font-size: 11px; color: #a9b1d6; }
-.notif-dismiss {
-    min-width: 18px;
-    min-height: 18px;
-    padding: 0 4px;
-    background: rgba(247, 118, 142, 0.15);
-    border: 1px solid rgba(247, 118, 142, 0.25);
-    border-radius: 4px;
-    color: #f7768e;
-    font-size: 10px;
+
+.cal-btn {
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    border-radius: 6px;
 }
-.notif-empty { font-size: 12px; color: #565f89; padding: 8px 4px; }
+.cal-btn:hover { background: rgba(255, 255, 255, 0.07); }
+
+.cal-header {
+    font-size: 11px;
+    font-weight: bold;
+    color: #7aa2f7;
+    letter-spacing: 0.04em;
+}
+.cal-dow {
+    font-size: 9px;
+    color: #565f89;
+    min-width: 22px;
+    min-height: 16px;
+}
+.cal-day {
+    font-size: 10px;
+    color: #c0caf5;
+    font-family: "JetBrains Mono", monospace;
+    min-width: 22px;
+    min-height: 20px;
+    border-radius: 4px;
+}
+.cal-day.today {
+    background: rgba(122, 162, 247, 0.20);
+    color: #7aa2f7;
+    font-weight: bold;
+}
+.cal-day.empty { color: transparent; }
 "#;
 
 /// Called once inside `app.connect_activate`. Loads CSS and builds the panel window.
-pub fn build_panel_window(app: &Application, state: Rc<RefCell<PanelState>>) {
+pub fn build_panel_window(
+    app: &Application,
+    state: Rc<RefCell<PanelState>>,
+    osd: Rc<crate::osd_ui::OsdWindow>,
+    qs_win: Rc<crate::quick_settings_ui::QuickSettingsWindow>,
+) {
     load_css();
-    build_window(app, state);
+    build_window(app, state, osd, qs_win);
 }
 
 fn load_css() {
@@ -134,7 +165,12 @@ fn load_css() {
     );
 }
 
-fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
+fn build_window(
+    app: &Application,
+    state: Rc<RefCell<PanelState>>,
+    osd: Rc<crate::osd_ui::OsdWindow>,
+    qs_win: Rc<crate::quick_settings_ui::QuickSettingsWindow>,
+) {
     let cpu_history: Rc<RefCell<Vec<f32>>> = Rc::new(RefCell::new(Vec::with_capacity(20)));
     let window = ApplicationWindow::builder()
         .application(app)
@@ -193,6 +229,12 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
         ws_pill.add_controller(scroll);
     }
     left.append(&ws_pill);
+
+    // Scratchpad badge — shown when niri has hidden scratchpad windows.
+    let scratch_badge = Label::new(Some("⦿"));
+    scratch_badge.add_css_class("scratch-badge");
+    scratch_badge.set_visible(false);
+    left.append(&scratch_badge);
 
     let media_pill = GtkBox::new(Orientation::Horizontal, 5);
     media_pill.add_css_class("sb-pill");
@@ -269,9 +311,16 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     date_label.add_css_class("date-label");
     time_box.append(&time_label);
     time_box.append(&date_label);
-    center.append(&weather_pill);
-    // time is placed in the right section, next to net stats
 
+    // Wrap time_box in a button that opens a calendar popover on click.
+    let cal_btn = Button::new();
+    cal_btn.add_css_class("cal-btn");
+    cal_btn.set_child(Some(&time_box));
+    let cal_popover = build_calendar_popover();
+    cal_popover.set_parent(&cal_btn);
+    cal_btn.connect_clicked(move |_| cal_popover.popup());
+
+    center.append(&cal_btn);
     bar.append(&center);
 
     // ── Spacer ───────────────────────────────────────────────────────────────
@@ -284,11 +333,10 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     right.set_valign(gtk4::Align::Center);
     right.set_margin_start(4);
 
-    // Time/date — sits right before network stats
+    // Thin separator before network stats
     let time_sep = Separator::new(Orientation::Vertical);
     time_sep.set_margin_start(2);
     time_sep.set_margin_end(2);
-    right.append(&time_box);
     right.append(&time_sep);
 
     // Network pill
@@ -380,20 +428,29 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     vol_pill.append(&vol_pct_lbl);
     // Scroll wheel adjusts volume ±5%.
     {
+        let osd_c = Rc::clone(&osd);
         let scroll = EventControllerScroll::new(EventControllerScrollFlags::VERTICAL);
-        scroll.connect_scroll(|_ctrl, _dx, dy| {
+        scroll.connect_scroll(move |_ctrl, _dx, dy| {
             let delta: i8 = if dy < 0.0 { 5 } else { -5 };
-            crate::sysinfo::set_volume_delta(delta);
+            let new_vol = crate::sysinfo::set_volume_delta(delta);
+            osd_c.show("🔊", new_vol);
             glib::Propagation::Stop
         });
         vol_pill.add_controller(scroll);
     }
     right.append(&vol_pill);
 
-    // Notifications button + popover
+    // Quick Settings button
+    let qs_win_c = Rc::clone(&qs_win);
+    let qs_btn = Button::with_label("⚙");
+    qs_btn.add_css_class("icon-btn");
+    qs_btn.connect_clicked(move |_| qs_win_c.toggle());
+    right.append(&qs_btn);
+
+    // Notifications button + popover (list rebuilt live on each open)
     let notif_btn = Button::with_label("🔔");
     notif_btn.add_css_class("icon-btn");
-    let notif_popover = build_notifications_popover(Rc::clone(&state));
+    let notif_popover = crate::notification_ui::build_notifications_popover(Rc::clone(&state));
     notif_popover.set_parent(&notif_btn);
     notif_btn.connect_clicked(move |_| notif_popover.popup());
     right.append(&notif_btn);
@@ -425,6 +482,7 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     // Fast 200 ms timer — only updates workspace dots so they feel instant.
     {
         let dots = ws_dots.clone();
+        let scratch_c = scratch_badge.clone();
         let state_fast = Rc::clone(&state);
         glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
             let s = state_fast.borrow();
@@ -439,6 +497,11 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
                         dot.add_css_class("ws-dot-occupied");
                     }
                 }
+            }
+            let n = ws.scratchpad_count;
+            scratch_c.set_visible(n > 0);
+            if n > 0 {
+                scratch_c.set_text(&format!("⦿ {n}"));
             }
             glib::ControlFlow::Continue
         });
@@ -518,133 +581,121 @@ fn build_window(app: &Application, state: Rc<RefCell<PanelState>>) {
     });
 }
 
-fn build_notifications_popover(state: Rc<RefCell<PanelState>>) -> Popover {
-    let popover = Popover::new();
-    popover.set_has_arrow(false);
+// ── Calendar popover ─────────────────────────────────────────────────────────
+
+fn build_calendar_popover() -> gtk4::Popover {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as libc::time_t;
+    // SAFETY: localtime_r is reentrant; `now` is a valid time_t value.
+    let mut ltm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&now, &mut ltm) };
+    let year = ltm.tm_year + 1900;
+    let month = (ltm.tm_mon + 1) as u32;
+    let day = ltm.tm_mday as u32;
+    let month_name = MONTH_NAMES[(month - 1) as usize];
+    let first_weekday = weekday_of(year, month, 1); // 0=Mon…6=Sun
+
+    let popover = gtk4::Popover::new();
+    popover.set_has_arrow(true);
     popover.set_position(gtk4::PositionType::Bottom);
 
     let root = GtkBox::new(Orientation::Vertical, 6);
-    root.set_margin_top(8);
-    root.set_margin_bottom(8);
+    root.set_margin_top(10);
+    root.set_margin_bottom(10);
     root.set_margin_start(12);
     root.set_margin_end(12);
-    root.set_size_request(260, -1);
 
-    let title = Label::new(Some("Notifications"));
-    title.add_css_class("qs-title");
-    title.set_halign(gtk4::Align::Start);
-    root.append(&title);
+    // Month header
+    let header = Label::new(Some(&format!("{month_name} {year}")));
+    header.add_css_class("cal-header");
+    header.set_halign(gtk4::Align::Center);
+    root.append(&header);
 
-    let scroll = ScrolledWindow::new();
-    scroll.set_max_content_height(300);
-    scroll.set_propagate_natural_height(true);
-    scroll.set_has_frame(false);
+    // Grid: 7 columns (Mon–Sun)
+    let grid = gtk4::Grid::new();
+    grid.set_row_spacing(2);
+    grid.set_column_spacing(2);
+    grid.set_halign(gtk4::Align::Center);
 
-    let list = ListBox::new();
-    list.set_show_separators(true);
-    list.set_selection_mode(gtk4::SelectionMode::None);
+    for (col, dow) in ["Mo","Tu","We","Th","Fr","Sa","Su"].iter().enumerate() {
+        let lbl = Label::new(Some(dow));
+        lbl.add_css_class("cal-dow");
+        lbl.set_halign(gtk4::Align::Center);
+        grid.attach(&lbl, col as i32, 0, 1, 1);
+    }
 
-    if state.borrow().notifications.is_empty() {
-        let empty = Label::new(Some("No notifications"));
-        empty.add_css_class("notif-empty");
-        empty.set_halign(gtk4::Align::Center);
-        list.append(&make_notif_row_widget(&empty));
-    } else {
-        for item in &state.borrow().notifications {
-            let row_box = GtkBox::new(Orientation::Vertical, 2);
-            row_box.add_css_class("notif-row");
+    let days_in_month = days_in(year, month);
+    // first_weekday: 0 = Mon, col 0; 6 = Sun, col 6
+    let mut col = first_weekday as i32;
+    let mut grid_row = 1i32;
 
-            let app_lbl = Label::new(Some(&item.app));
-            app_lbl.add_css_class("notif-app");
-            app_lbl.set_halign(gtk4::Align::Start);
-
-            let summary_lbl = Label::new(Some(&item.summary));
-            summary_lbl.add_css_class("notif-summary");
-            summary_lbl.set_halign(gtk4::Align::Start);
-            summary_lbl.set_wrap(true);
-
-            let body_lbl = Label::new(Some(&item.body));
-            body_lbl.add_css_class("notif-body");
-            body_lbl.set_halign(gtk4::Align::Start);
-            body_lbl.set_wrap(true);
-
-            let header = GtkBox::new(Orientation::Horizontal, 0);
-            header.append(&app_lbl);
-            let dismiss_btn = Button::with_label("✕");
-            dismiss_btn.add_css_class("notif-dismiss");
-            dismiss_btn.set_hexpand(true);
-            dismiss_btn.set_halign(gtk4::Align::End);
-            let id = item.id;
-            let state_c = Rc::clone(&state);
-            dismiss_btn.connect_clicked(move |_| {
-                let _ = state_c.borrow_mut().dismiss_notification(id);
-                log::info!("dismissed notification {id}");
-            });
-            header.append(&dismiss_btn);
-
-            row_box.append(&header);
-            row_box.append(&summary_lbl);
-            if !item.body.is_empty() {
-                row_box.append(&body_lbl);
-            }
-
-            let row = ListBoxRow::new();
-            row.set_child(Some(&row_box));
-            list.append(&row);
+    for d in 1..=(days_in_month as i32) {
+        let lbl = Label::new(Some(&format!("{d}")));
+        lbl.add_css_class("cal-day");
+        lbl.set_halign(gtk4::Align::Center);
+        if d == day as i32 {
+            lbl.add_css_class("today");
+        }
+        grid.attach(&lbl, col, grid_row, 1, 1);
+        col += 1;
+        if col == 7 {
+            col = 0;
+            grid_row += 1;
         }
     }
 
-    scroll.set_child(Some(&list));
-    root.append(&scroll);
+    root.append(&grid);
     popover.set_child(Some(&root));
     popover
 }
 
-fn make_notif_row_widget(child: &impl IsA<gtk4::Widget>) -> ListBoxRow {
-    let row = ListBoxRow::new();
-    row.set_child(Some(child));
-    row
+const MONTH_NAMES: [&str; 12] = [
+    "January","February","March","April","May","June",
+    "July","August","September","October","November","December",
+];
+
+
+/// Weekday of (year, month, day): 0 = Monday, 6 = Sunday (ISO).
+fn weekday_of(year: i32, month: u32, day: u32) -> u32 {
+    // Tomohiko Sakamoto's algorithm adapted to Mon=0.
+    let t: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if month < 3 { year - 1 } else { year };
+    let d = day as i32;
+    let dow = (y + y/4 - y/100 + y/400 + t[(month-1) as usize] + d) % 7;
+    // dow is Sun=0 → convert to Mon=0 ISO
+    ((dow + 6) % 7) as u32
+}
+
+/// Number of days in (year, month).
+fn days_in(year: i32, month: u32) -> u32 {
+    match month {
+        1|3|5|7|8|10|12 => 31,
+        4|6|9|11 => 30,
+        2 => if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 29 } else { 28 },
+        _ => 30,
+    }
 }
 
 fn tick_time(time_lbl: &Label, date_lbl: &Label) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    let (h, m) = ((secs / 3600) % 24, (secs / 60) % 60);
-    time_lbl.set_text(&format!("{h:02}:{m:02}"));
-    let days_since_epoch = secs / 86400;
-    let dow =
-        ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][(days_since_epoch % 7) as usize];
-    let days_in_year = days_since_epoch % 365;
-    let (month, dom) = approx_month_day(days_in_year);
-    date_lbl.set_text(&format!("{dow}, {month} {dom}"));
-}
-
-fn approx_month_day(day: u64) -> (&'static str, u64) {
-    const MONTHS: [(&str, u64); 12] = [
-        ("Jan", 31),
-        ("Feb", 28),
-        ("Mar", 31),
-        ("Apr", 30),
-        ("May", 31),
-        ("Jun", 30),
-        ("Jul", 31),
-        ("Aug", 31),
-        ("Sep", 30),
-        ("Oct", 31),
-        ("Nov", 30),
-        ("Dec", 31),
-    ];
-    let mut remaining = day;
-    for (name, days) in MONTHS {
-        if remaining < days {
-            return (name, remaining + 1);
-        }
-        remaining -= days;
-    }
-    ("Dec", 31)
+        .as_secs() as libc::time_t;
+    // SAFETY: localtime_r is reentrant; `now` is a valid time_t value.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&now, &mut tm) };
+    time_lbl.set_text(&format!("{:02}:{:02}", tm.tm_hour, tm.tm_min));
+    const DOW: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MON: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    date_lbl.set_text(&format!(
+        "{}, {} {}",
+        DOW[tm.tm_wday as usize],
+        MON[tm.tm_mon as usize],
+        tm.tm_mday,
+    ));
 }
 
 fn fmt_speed(bps: u64) -> String {
