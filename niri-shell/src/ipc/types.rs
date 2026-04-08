@@ -51,12 +51,49 @@ pub enum NiriAction {
     FocusWindow { id: u64 },
 }
 
+// ── Output types ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OutputMode {
+    pub width: u32,
+    pub height: u32,
+    pub refresh_rate: u32,
+    pub is_preferred: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LogicalOutput {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+    pub transform: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NiriOutput {
+    pub name: String,
+    pub make: String,
+    pub model: String,
+    pub serial: String,
+    pub physical_size: Option<[u32; 2]>,
+    pub modes: Vec<OutputMode>,
+    /// Index into `modes` for the currently active mode, if any.
+    pub current_mode: Option<usize>,
+    pub is_custom_mode: bool,
+    pub vrr_supported: bool,
+    pub vrr_enabled: bool,
+    pub logical: Option<LogicalOutput>,
+}
+
 // ── Wire request/reply wrappers ───────────────────────────────────────────────
 
 /// Top-level IPC request sent to niri over the socket.
 #[derive(Debug, Serialize)]
 pub enum NiriRequest {
     EventStream,
+    Outputs,
     Action(NiriAction),
 }
 

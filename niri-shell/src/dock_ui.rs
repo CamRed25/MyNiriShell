@@ -8,8 +8,8 @@ use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, Image, Label, Orientation, Overlay,
-    Separator,
+    Application, ApplicationWindow, Box as GtkBox, Button, EventControllerMotion, Image, Label,
+    Orientation, Overlay, Separator,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
@@ -110,10 +110,10 @@ fn build_window(app: &Application, state: Rc<RefCell<DockState>>) {
         .resizable(false)
         .build();
 
-    // Pin to the bottom edge, centred, above all windows.
+    // Float above all windows at the bottom edge — no exclusive zone so nothing is pushed away.
     window.init_layer_shell();
     window.set_layer(Layer::Top);
-    window.auto_exclusive_zone_enable();
+    window.set_exclusive_zone(0);
     window.set_anchor(Edge::Bottom, true);
     window.set_anchor(Edge::Left, false);
     window.set_anchor(Edge::Right, false);
@@ -121,7 +121,126 @@ fn build_window(app: &Application, state: Rc<RefCell<DockState>>) {
 
     let dock = build_dock(state);
     window.set_child(Some(&dock));
+
+    // ── Intelligent hide ──────────────────────────────────────────────────────
+    // current_margin: what the compositor sees right now (0 = fully visible).
+    // target_margin:  where we're animating toward (negative = hidden off-screen,
+    //                 leaving a 2 px trigger strip so hover events still fire).
+    // animating:      true while the 16 ms easing loop is running.
+    // hovering:       true while the pointer is inside the dock; prevents the
+    //                 hide-delay timer from firing after a quick mouse-out/re-enter.
+    let current_margin: Rc<RefCell<i32>> = Rc::new(RefCell::new(0));
+    let target_margin: Rc<RefCell<i32>> = Rc::new(RefCell::new(0));
+    let animating: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let hovering: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+
+    // After realize, wait one frame so the window has a real allocated height,
+    // then slide it to hidden. The dock briefly flashes visible then retreats —
+    // this lets users know where it is on first launch.
+    {
+        let win_weak = window.downgrade();
+        let current_margin = Rc::clone(&current_margin);
+        let target_margin = Rc::clone(&target_margin);
+        let animating = Rc::clone(&animating);
+        window.connect_realize(move |_| {
+            let win_weak = win_weak.clone();
+            let current_margin = Rc::clone(&current_margin);
+            let target_margin = Rc::clone(&target_margin);
+            let animating = Rc::clone(&animating);
+            glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
+                let Some(win) = win_weak.upgrade() else { return };
+                let h = win.height();
+                if h <= 0 { return; }
+                *target_margin.borrow_mut() = -(h - 2);
+                kick_animation(win_weak, current_margin, target_margin, animating);
+            });
+        });
+    }
+
+    let motion = EventControllerMotion::new();
+
+    // Enter: cancel any pending hide, slide dock into view immediately.
+    {
+        let target_margin = Rc::clone(&target_margin);
+        let current_margin = Rc::clone(&current_margin);
+        let animating = Rc::clone(&animating);
+        let hovering = Rc::clone(&hovering);
+        let win_weak = window.downgrade();
+        motion.connect_enter(move |_, _x, _y| {
+            *hovering.borrow_mut() = true;
+            *target_margin.borrow_mut() = 0;
+            kick_animation(
+                win_weak.clone(),
+                Rc::clone(&current_margin),
+                Rc::clone(&target_margin),
+                Rc::clone(&animating),
+            );
+        });
+    }
+
+    // Leave: wait 400 ms before hiding so brief mouseouts don't cause flicker.
+    {
+        let target_margin = Rc::clone(&target_margin);
+        let current_margin = Rc::clone(&current_margin);
+        let animating = Rc::clone(&animating);
+        let hovering = Rc::clone(&hovering);
+        let win_weak = window.downgrade();
+        motion.connect_leave(move |_| {
+            *hovering.borrow_mut() = false;
+            let target_margin = Rc::clone(&target_margin);
+            let current_margin = Rc::clone(&current_margin);
+            let animating = Rc::clone(&animating);
+            let hovering = Rc::clone(&hovering);
+            let win_weak = win_weak.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+                if *hovering.borrow() {
+                    return; // mouse came back — don't hide
+                }
+                let Some(win) = win_weak.upgrade() else { return };
+                let h = win.height();
+                if h <= 0 { return; }
+                *target_margin.borrow_mut() = -(h - 2);
+                kick_animation(win_weak, current_margin, target_margin, animating);
+            });
+        });
+    }
+
+    window.add_controller(motion);
     window.present();
+}
+
+/// Starts an easing loop (16 ms ticks) that moves the dock's bottom margin from
+/// `current` toward `target`.  Safe to call while already animating — the running
+/// loop will pick up the updated target automatically, so we just bail early.
+fn kick_animation(
+    win_weak: glib::WeakRef<ApplicationWindow>,
+    current: Rc<RefCell<i32>>,
+    target: Rc<RefCell<i32>>,
+    animating: Rc<RefCell<bool>>,
+) {
+    if *animating.borrow() {
+        return; // existing loop will read the updated target next tick
+    }
+    *animating.borrow_mut() = true;
+    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        let Some(win) = win_weak.upgrade() else {
+            *animating.borrow_mut() = false;
+            return glib::ControlFlow::Break;
+        };
+        let t = *target.borrow();
+        let c = *current.borrow();
+        if c == t {
+            *animating.borrow_mut() = false;
+            return glib::ControlFlow::Break;
+        }
+        let diff = t - c;
+        // Ease: 30 % of remaining distance per frame, minimum 2 px/frame.
+        let step = ((diff.abs() as f32 * 0.30) as i32).max(2);
+        let next = if diff > 0 { (c + step).min(t) } else { (c - step).max(t) };
+        *current.borrow_mut() = next;
+        win.set_margin(Edge::Bottom, next);
+        glib::ControlFlow::Continue
+    });
 }
 
 fn build_dock(state: Rc<RefCell<DockState>>) -> GtkBox {

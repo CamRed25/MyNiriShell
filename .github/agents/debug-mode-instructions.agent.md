@@ -1,7 +1,7 @@
 ---
 description: Debug your application to find and fix a bug
 name: Debug Mode Instructions
-tools: ['shell', 'read', 'search', 'edit', 'task', 'skill', 'web_search', 'web_fetch', 'ask_user']
+tools: ['execute', 'read', 'search', 'search/codebase', 'edit/editFiles', 'read/problems']
 ---
 
 # Debug Mode Instructions instructions
@@ -80,3 +80,29 @@ You are in debug mode. Your primary objective is to systematically identify, ana
 - **Test Thoroughly**: Verify fixes work in various scenarios and environments
 
 Remember: Always reproduce and understand the bug before attempting to fix it. A well-understood problem is half solved.
+
+---
+
+## niri-shell Specific Debugging
+
+### Build Commands
+```sh
+cd niri-shell
+cargo check --quiet          # fast type/borrow check
+cargo build                  # full build
+cargo test                   # run unit tests
+cargo clippy -- -D warnings  # lint
+cargo fmt                    # format
+```
+
+### Runtime Debugging
+- Set `RUST_LOG=debug` or `RUST_LOG=niri_shell=debug` for structured log output (`log::` macros)
+- Set `GTK_DEBUG=interactive` to open the GTK Inspector in a running instance
+- The shell replaces any prior instance on startup via `SIGTERM` — kill the old process first when testing changes
+- The Niri IPC socket is at `$NIRI_SOCKET`; inspect the event stream with: `socat - UNIX-CONNECT:$NIRI_SOCKET`
+
+### Architecture Constraints to Keep in Mind
+- `*_backend.rs` files are pure Rust — no GTK types. Bugs in these are unit-testable in isolation.
+- `*_ui.rs` files run on the GTK main thread only — do not call GTK from background threads.
+- Cross-thread state uses `Arc<Mutex<>>`. GTK-thread-only state uses `Rc<RefCell<>>`.
+- IPC events arrive on a background thread → delivered to GTK thread via `glib::timeout_add_local` (50 ms batch).

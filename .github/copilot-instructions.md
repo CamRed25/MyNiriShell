@@ -12,26 +12,42 @@ All three are compiled into one crate at `niri-shell/`. **Do not split into sepa
 
 ```
 niri-shell/src/
-├── main.rs                  # Entry point; prior-instance replacement (SIGTERM)
-├── shell.rs                 # GTK Application setup, IPC wiring, weather polling
-├── state.rs                 # ShellState: applies Niri IPC events to panel/dock
-├── error.rs                 # Top-level error types (ShellError, IpcError)
+├── main.rs                       # Entry point; prior-instance replacement (SIGTERM)
+├── shell.rs                      # GTK Application setup, IPC wiring, weather polling
+├── shell/                        # Shell submodules
+│   ├── config.rs                 # Shell configuration loading
+│   ├── input.rs                  # Input event handling
+│   ├── launcher.rs               # Launcher integration
+│   ├── monitor.rs                # Monitor/output management
+│   ├── panel.rs                  # Panel submodule logic
+│   ├── protocol.rs               # Protocol definitions
+│   └── window_manager.rs         # Window management logic
+├── state.rs                      # ShellState: applies Niri IPC events to panel/dock
+├── error.rs                      # Top-level error types (ShellError, IpcError)
 │
-├── panel_backend.rs         # Panel data model (pure Rust, zero GTK)
-├── panel_ui.rs              # GTK4 panel layer-shell window
-├── dock_backend.rs          # Dock data model (pinned + active items, reorder)
-├── dock_ui.rs               # GTK4 dock layer-shell window
-├── launcher_backend.rs      # App loading, fuzzy search, calculator eval
-├── launcher_ui.rs           # GTK4 launcher dialog (centered, keyboard-driven)
+├── panel_backend.rs              # Panel data model (pure Rust, zero GTK)
+├── panel_ui.rs                   # GTK4 panel layer-shell window
+├── dock_backend.rs               # Dock data model (pinned + active items, reorder)
+├── dock_ui.rs                    # GTK4 dock layer-shell window
+├── launcher_backend.rs           # App loading, fuzzy search, calculator eval
+├── launcher_ui.rs                # GTK4 launcher dialog (centered, keyboard-driven)
+├── quick_settings_backend.rs     # Quick settings data model (WiFi/BT/VPN/NightLight tiles)
+├── quick_settings_ui.rs          # GTK4 quick settings layer-shell overlay (top-right)
+├── notification_daemon.rs        # D-Bus org.freedesktop.Notifications server
+├── notification_ui.rs            # GTK4 toast popups + notification centre
+├── polkit_agent.rs               # org.freedesktop.PolicyKit1.AuthenticationAgent via zbus
+├── polkit_ui.rs                  # GTK4 modal password dialog for privilege escalation
+├── power_backend.rs              # Power/session management (lock, logout, suspend)
+├── power_ui.rs                   # GTK4 power menu UI
 │
-├── ipc/mod.rs               # Unix socket client, Niri event stream, action sender
-├── ipc/types.rs             # Serde types for Niri IPC (events, actions, requests)
+├── ipc/mod.rs                    # Unix socket client, Niri event stream, action sender
+├── ipc/types.rs                  # Serde types for Niri IPC (events, actions, requests)
 │
-├── media.rs                 # MPRIS2 D-Bus polling (zbus) + playback control
-├── sysinfo.rs               # CPU, memory, network, volume (/proc/stat, /proc/meminfo)
-├── weather.rs               # HTTP fetch from wttr.in, JSON parse
-├── osd_ui.rs                # Volume/brightness OSD overlay (in progress)
-└── screenshot_ui.rs         # Screenshot mode picker overlay (in progress)
+├── media.rs                      # MPRIS2 D-Bus polling (zbus) + playback control
+├── sysinfo.rs                    # CPU, memory, network, volume (/proc/stat, /proc/meminfo)
+├── weather.rs                    # HTTP fetch from wttr.in, JSON parse
+├── osd_ui.rs                     # Volume/brightness OSD overlay (in progress)
+└── screenshot_ui.rs              # Screenshot mode picker overlay (in progress)
 ```
 
 ## Build & Test
@@ -79,7 +95,10 @@ env_logger = "0.11"
 thiserror = "2"
 libc = "0.2"
 ureq = "3.3.0"
-zbus = "5.14.0"
+zbus = "4.1"
+zbus_macros = "4.1"
+tokio = { version = "1.37.0", features = ["rt-multi-thread", "macros", "sync"] }
+futures = "0.3"
 ```
 
 ## Architecture
@@ -124,16 +143,16 @@ All values come from `mockup/` HTML files. Apply via `gtk4::CssProvider`. New UI
 - Use iterators over index loops
 - No `#[allow(warnings)]` at crate root
 
-## Planned Features (from `TODO.md`)
+## Planned Features (from `niri-shell/TODO.md`)
 
 Work in these areas without changing the above rules:
 
-- **Quick settings panel** — layer-shell overlay anchored top-right; Wi-Fi/BT/VPN/NightLight tiles via NM + BlueZ D-Bus; brightness + volume sliders; lock/logout buttons
+- **Theme system** — `theme.rs` parses `~/.config/niri-shell/theme.toml` into a typed `ThemeTokens` struct in an `OnceLock`; each `*_ui.rs` interpolates tokens into CSS; no hardcoded hex values remain
+- **Wallpaper** — `wallpaper` path token in `theme.toml`; spawn `swaybg -i <path> -m fill` from `shell.rs` on startup
+- **Workspace app icons** — replace workspace dots with 16 px app icons grouped by `workspace_id`; use same `.desktop` lookup as dock
+- **`org.freedesktop.ScreenSaver` D-Bus stub** — register via zbus; track `Inhibit`/`UnInhibit` calls; sync to Idle Inhibitor QS tile
 - **OSD overlay** — `osd_ui.rs`; centred pill, auto-dismiss after ~1.5 s
-- **Notification daemon** — D-Bus `org.freedesktop.Notifications` server inside the shell process; toast popups + notification centre
 - **Screenshot switcher** — `screenshot_ui.rs`; region/window/fullscreen via `grim` + `slurp`
 - **Calendar popover** — month grid on clock click; no external deps
-- **Workspace app icons** — 16 px icons instead of dots
-- **Launcher: recent files + clipboard history** — read `recently-used.xbel`; `cliphist` integration
-- **Theming** — `theme.toml` source of truth parsed in `theme.rs`; each `*_ui.rs` interpolates tokens into its CSS string; no hardcoded hex values remain
+- **Multi-monitor panel/dock** — panel/dock on all outputs via `gtk4-layer-shell` per-output API; `Vec<PanelWindow>` in `shell.rs`
 - **systemd user service** — `niri-shell.service` (`Restart=on-failure`, `After=graphical-session.target`)

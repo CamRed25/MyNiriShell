@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 use std::process::Child;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use gtk4::{
     glib,
@@ -277,16 +278,9 @@ impl QuickSettingsWindow {
         if self.window.is_visible() {
             self.window.set_visible(false);
         } else {
-            // Present immediately so the window appears on the first click without delay.
-            // Schedule refresh via idle_add so the window has already been mapped before
-            // we block the main thread running nmcli/pactl/etc.
             self.window.present();
-            let weak = Rc::downgrade(self);
-            glib::idle_add_local_once(move || {
-                if let Some(this) = weak.upgrade() {
-                    this.refresh();
-                }
-            });
+            // refresh() is non-blocking: heavy work is on a background thread.
+            self.refresh();
         }
     }
 
@@ -297,10 +291,28 @@ impl QuickSettingsWindow {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /// Query all external state and update every widget.
-    fn refresh(&self) {
-        let fresh = QsState::load();
+    /// Kick off a background load of `QsState`; results are applied on the GTK
+    /// main thread via `glib::MainContext::channel` — no blocking on the GTK thread.
+    fn refresh(self: &Rc<Self>) {
+        let result: Arc<Mutex<Option<QsState>>> = Arc::new(Mutex::new(None));
+        let writer = Arc::clone(&result);
+        std::thread::spawn(move || {
+            *writer.lock().unwrap() = Some(QsState::load());
+        });
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+            if let Some(fresh) = result.lock().unwrap().take() {
+                if let Some(this) = weak.upgrade() {
+                    this.apply_fresh_state(fresh);
+                }
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 
+    /// Apply a freshly-loaded `QsState` snapshot to all widgets. Runs on GTK thread.
+    fn apply_fresh_state(&self, fresh: QsState) {
         let wifi_desc = if fresh.wifi_active { fresh.wifi_ssid.clone() } else { "Off".into() };
         set_tile_active(&self.tile_wifi, fresh.wifi_active);
         self.tile_wifi.desc.set_text(&wifi_desc);
@@ -314,7 +326,7 @@ impl QuickSettingsWindow {
         set_tile_active(&self.tile_bt, fresh.bt_active);
         self.tile_bt.desc.set_text(if fresh.bt_active { "On" } else { "Off" });
 
-        // night_light and dnd are in-process; keep existing values from state.
+        // night_light, dnd, idle are in-process; preserve current values.
         let (nl, dnd, idle) = {
             let s = self.state.borrow();
             (s.night_light, s.dnd, s.idle_inhibited)
@@ -336,11 +348,10 @@ impl QuickSettingsWindow {
         set_tile_active(&self.tile_idle, idle);
         self.tile_idle.desc.set_text(if idle { "Active" } else { "Off" });
 
-        // Sliders — block handler to avoid feedback loop.
         self.brightness_scale.set_value(fresh.brightness as f64);
         self.volume_scale.set_value(fresh.volume as f64);
 
-        // Commit fresh state (keep in-process fields).
+        // Commit fresh state (preserve in-process fields).
         let mut s = self.state.borrow_mut();
         s.wifi_active = fresh.wifi_active;
         s.wifi_ssid = fresh.wifi_ssid;
@@ -355,22 +366,43 @@ impl QuickSettingsWindow {
     }
 
     fn wire_tiles(self: &Rc<Self>) {
-        // WiFi
+        // WiFi — optimistic update; nmcli runs off-thread.
         {
             let state = Rc::clone(&self.state);
-            let tile = TileRef { btn: self.tile_wifi.btn.clone(), desc: self.tile_wifi.desc.clone() };
+            let btn = self.tile_wifi.btn.clone();
+            let desc = self.tile_wifi.desc.clone();
             self.tile_wifi.btn.connect_clicked(move |_| {
                 let cur = state.borrow().wifi_active;
-                match qs::toggle_wifi(cur) {
-                    Ok(new) => {
-                        state.borrow_mut().wifi_active = new;
-                        let ssid = if new { qs::query_wifi_ssid() } else { String::new() };
-                        state.borrow_mut().wifi_ssid = ssid.clone();
-                        set_tile_active(&tile, new);
-                        tile.desc.set_text(if new { &ssid } else { "Off" });
+                let new = !cur;
+                state.borrow_mut().wifi_active = new;
+                if new { btn.add_css_class("qs-tile-active"); }
+                else   { btn.remove_css_class("qs-tile-active"); }
+                desc.set_text(if new { "Enabling…" } else { "Off" });
+
+                // Arc flag: None=pending, Some(ok)
+                let ok_flag: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+                let writer = Arc::clone(&ok_flag);
+                std::thread::spawn(move || {
+                    let ok = qs::toggle_wifi(cur)
+                        .map_err(|e| log::warn!("wifi toggle: {e}"))
+                        .is_ok();
+                    *writer.lock().unwrap() = Some(ok);
+                });
+                let btn2 = btn.clone();
+                let desc2 = desc.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+                    if let Some(ok) = ok_flag.lock().unwrap().take() {
+                        if ok && new {
+                            desc2.set_text("On"); // refresh() shows real SSID on next open
+                        } else if !ok {
+                            if cur { btn2.add_css_class("qs-tile-active"); }
+                            else   { btn2.remove_css_class("qs-tile-active"); }
+                            desc2.set_text(if cur { "On" } else { "Off" });
+                        }
+                        return glib::ControlFlow::Break;
                     }
-                    Err(e) => log::warn!("wifi toggle: {e}"),
-                }
+                    glib::ControlFlow::Continue
+                });
             });
         }
 
@@ -380,102 +412,177 @@ impl QuickSettingsWindow {
         // VPN — read-only display
         self.tile_vpn.btn.set_sensitive(false);
 
-        // Bluetooth
+        // Bluetooth — optimistic update; rfkill runs off-thread.
         {
             let state = Rc::clone(&self.state);
-            let tile = TileRef { btn: self.tile_bt.btn.clone(), desc: self.tile_bt.desc.clone() };
+            let btn = self.tile_bt.btn.clone();
+            let desc = self.tile_bt.desc.clone();
             self.tile_bt.btn.connect_clicked(move |_| {
                 let cur = state.borrow().bt_active;
-                match qs::toggle_bt(cur) {
-                    Ok(new) => {
-                        state.borrow_mut().bt_active = new;
-                        set_tile_active(&tile, new);
-                        tile.desc.set_text(if new { "On" } else { "Off" });
+                let new = !cur;
+                state.borrow_mut().bt_active = new;
+                if new { btn.add_css_class("qs-tile-active"); }
+                else   { btn.remove_css_class("qs-tile-active"); }
+                desc.set_text(if new { "On" } else { "Off" });
+
+                let ok_flag: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+                let writer = Arc::clone(&ok_flag);
+                std::thread::spawn(move || {
+                    let ok = qs::toggle_bt(cur)
+                        .map_err(|e| log::warn!("bt toggle: {e}"))
+                        .is_ok();
+                    *writer.lock().unwrap() = Some(ok);
+                });
+                let btn2 = btn.clone();
+                let desc2 = desc.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+                    if let Some(ok) = ok_flag.lock().unwrap().take() {
+                        if !ok {
+                            if cur { btn2.add_css_class("qs-tile-active"); }
+                            else   { btn2.remove_css_class("qs-tile-active"); }
+                            desc2.set_text(if cur { "On" } else { "Off" });
+                        }
+                        return glib::ControlFlow::Break;
                     }
-                    Err(e) => log::warn!("bt toggle: {e}"),
-                }
+                    glib::ControlFlow::Continue
+                });
             });
         }
 
-        // Night Light
+        // Night Light — spawns/kills gammastep; fast enough to stay on GTK thread.
         {
             let state = Rc::clone(&self.state);
             let child_ref = Rc::clone(&self.night_light_child);
-            let tile = TileRef { btn: self.tile_nl.btn.clone(), desc: self.tile_nl.desc.clone() };
+            let btn = self.tile_nl.btn.clone();
+            let desc = self.tile_nl.desc.clone();
             self.tile_nl.btn.connect_clicked(move |_| {
                 let cur = state.borrow().night_light;
                 match qs::toggle_night_light(cur, &mut child_ref.borrow_mut()) {
                     Ok(new) => {
                         state.borrow_mut().night_light = new;
-                        set_tile_active(&tile, new);
-                        tile.desc.set_text(if new { "On" } else { "Off" });
+                        if new { btn.add_css_class("qs-tile-active"); }
+                        else   { btn.remove_css_class("qs-tile-active"); }
+                        desc.set_text(if new { "On" } else { "Off" });
                     }
                     Err(e) => log::warn!("night light toggle: {e}"),
                 }
             });
         }
 
-        // DND — in-process only
+        // DND — in-process only; instant.
         {
             let state = Rc::clone(&self.state);
-            let tile = TileRef { btn: self.tile_dnd.btn.clone(), desc: self.tile_dnd.desc.clone() };
+            let btn = self.tile_dnd.btn.clone();
+            let desc = self.tile_dnd.desc.clone();
             self.tile_dnd.btn.connect_clicked(move |_| {
                 let new = !state.borrow().dnd;
                 state.borrow_mut().dnd = new;
-                set_tile_active(&tile, new);
-                tile.desc.set_text(if new { "On" } else { "Off" });
+                if new { btn.add_css_class("qs-tile-active"); }
+                else   { btn.remove_css_class("qs-tile-active"); }
+                desc.set_text(if new { "On" } else { "Off" });
             });
         }
 
         // Keyboard layout — read-only
         self.tile_kb.btn.set_sensitive(false);
 
-        // Mic mute
+        // Mic mute — optimistic update; pactl runs off-thread.
         {
             let state = Rc::clone(&self.state);
-            let tile = TileRef { btn: self.tile_mic.btn.clone(), desc: self.tile_mic.desc.clone() };
+            let btn = self.tile_mic.btn.clone();
+            let desc = self.tile_mic.desc.clone();
             self.tile_mic.btn.connect_clicked(move |_| {
-                match qs::toggle_mic_mute() {
-                    Ok(new) => {
-                        state.borrow_mut().mic_muted = new;
-                        set_tile_active(&tile, new);
-                        tile.desc.set_text(if new { "Muted" } else { "Active" });
+                let cur = state.borrow().mic_muted;
+                let new = !cur;
+                state.borrow_mut().mic_muted = new;
+                if new { btn.add_css_class("qs-tile-active"); }
+                else   { btn.remove_css_class("qs-tile-active"); }
+                desc.set_text(if new { "Muted" } else { "Active" });
+
+                // Store Option<Option<bool>>: None=pending, Some(Some(actual))=ok, Some(None)=err
+                let result_flag: Arc<Mutex<Option<Option<bool>>>> = Arc::new(Mutex::new(None));
+                let writer = Arc::clone(&result_flag);
+                std::thread::spawn(move || {
+                    let actual = qs::toggle_mic_mute()
+                        .map_err(|e| log::warn!("mic mute toggle: {e}"))
+                        .ok();
+                    *writer.lock().unwrap() = Some(actual);
+                });
+                let btn2 = btn.clone();
+                let desc2 = desc.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+                    if let Some(result) = result_flag.lock().unwrap().take() {
+                        match result {
+                            Some(actual) if actual != new => {
+                                if actual { btn2.add_css_class("qs-tile-active"); }
+                                else      { btn2.remove_css_class("qs-tile-active"); }
+                                desc2.set_text(if actual { "Muted" } else { "Active" });
+                            }
+                            None => {
+                                if cur { btn2.add_css_class("qs-tile-active"); }
+                                else   { btn2.remove_css_class("qs-tile-active"); }
+                                desc2.set_text(if cur { "Muted" } else { "Active" });
+                            }
+                            _ => {}
+                        }
+                        return glib::ControlFlow::Break;
                     }
-                    Err(e) => log::warn!("mic mute toggle: {e}"),
-                }
+                    glib::ControlFlow::Continue
+                });
             });
         }
 
-        // Power profile — cycles through three states
+        // Power profile — optimistic cycle; powerprofilesctl runs off-thread.
         {
             let state = Rc::clone(&self.state);
-            let tile = TileRef { btn: self.tile_pwr.btn.clone(), desc: self.tile_pwr.desc.clone() };
+            let btn = self.tile_pwr.btn.clone();
+            let desc = self.tile_pwr.desc.clone();
             self.tile_pwr.btn.connect_clicked(move |_| {
                 let cur = state.borrow().power_profile;
-                match qs::cycle_power_profile(cur) {
-                    Ok(new) => {
-                        state.borrow_mut().power_profile = new;
-                        set_tile_active(&tile, new != PowerProfile::Balanced);
-                        tile.desc.set_text(new.label());
+                let next = cur.next();
+                state.borrow_mut().power_profile = next;
+                desc.set_text(next.label());
+                if next != PowerProfile::Balanced { btn.add_css_class("qs-tile-active"); }
+                else { btn.remove_css_class("qs-tile-active"); }
+
+                let ok_flag: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+                let writer = Arc::clone(&ok_flag);
+                std::thread::spawn(move || {
+                    let ok = qs::cycle_power_profile(cur)
+                        .map_err(|e| log::warn!("power profile cycle: {e}"))
+                        .is_ok();
+                    *writer.lock().unwrap() = Some(ok);
+                });
+                let btn2 = btn.clone();
+                let desc2 = desc.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+                    if let Some(ok) = ok_flag.lock().unwrap().take() {
+                        if !ok {
+                            desc2.set_text(cur.label());
+                            if cur != PowerProfile::Balanced { btn2.add_css_class("qs-tile-active"); }
+                            else { btn2.remove_css_class("qs-tile-active"); }
+                        }
+                        return glib::ControlFlow::Break;
                     }
-                    Err(e) => log::warn!("power profile cycle: {e}"),
-                }
+                    glib::ControlFlow::Continue
+                });
             });
         }
 
-        // Idle inhibitor
+        // Idle inhibitor — spawns/kills systemd-inhibit; fast enough to stay on GTK thread.
         {
             let state = Rc::clone(&self.state);
             let child_ref = Rc::clone(&self.idle_child);
-            let tile =
-                TileRef { btn: self.tile_idle.btn.clone(), desc: self.tile_idle.desc.clone() };
+            let btn = self.tile_idle.btn.clone();
+            let desc = self.tile_idle.desc.clone();
             self.tile_idle.btn.connect_clicked(move |_| {
                 let cur = state.borrow().idle_inhibited;
                 match qs::toggle_idle_inhibitor(cur, &mut child_ref.borrow_mut()) {
                     Ok(new) => {
                         state.borrow_mut().idle_inhibited = new;
-                        set_tile_active(&tile, new);
-                        tile.desc.set_text(if new { "Active" } else { "Off" });
+                        if new { btn.add_css_class("qs-tile-active"); }
+                        else   { btn.remove_css_class("qs-tile-active"); }
+                        desc.set_text(if new { "Active" } else { "Off" });
                     }
                     Err(e) => log::warn!("idle inhibitor toggle: {e}"),
                 }
@@ -484,29 +591,31 @@ impl QuickSettingsWindow {
     }
 
     fn wire_sliders(self: &Rc<Self>) {
-        // Brightness
+        // Brightness — update state immediately; write to hardware off-thread.
         {
             let state = Rc::clone(&self.state);
             self.brightness_scale.connect_value_changed(move |scale| {
                 let pct = scale.value().round() as u8;
-                if let Err(e) = qs::set_brightness(pct) {
-                    log::warn!("brightness: {e}");
-                } else {
-                    state.borrow_mut().brightness = pct;
-                }
+                state.borrow_mut().brightness = pct;
+                std::thread::spawn(move || {
+                    if let Err(e) = qs::set_brightness(pct) {
+                        log::warn!("brightness: {e}");
+                    }
+                });
             });
         }
 
-        // Volume
+        // Volume — update state immediately; pactl runs off-thread.
         {
             let state = Rc::clone(&self.state);
             self.volume_scale.connect_value_changed(move |scale| {
                 let pct = scale.value().round() as u8;
-                if let Err(e) = qs::set_volume_abs(pct) {
-                    log::warn!("volume: {e}");
-                } else {
-                    state.borrow_mut().volume = pct;
-                }
+                state.borrow_mut().volume = pct;
+                std::thread::spawn(move || {
+                    if let Err(e) = qs::set_volume_abs(pct) {
+                        log::warn!("volume: {e}");
+                    }
+                });
             });
         }
     }
@@ -603,7 +712,11 @@ fn build_footer_row(app: &gtk4::Application) -> GtkBox {
     settings_btn.add_css_class("qs-foot-btn");
     settings_btn.set_hexpand(true);
     settings_btn.connect_clicked(|_| {
-        qs::launch("env XDG_CURRENT_DESKTOP=GNOME gnome-control-center");
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::process::Command::new(exe).arg("--settings").spawn();
+        } else {
+            log::warn!("could not determine current exe path to launch settings");
+        }
     });
 
     let displays_btn = Button::with_label("🖥 Displays");

@@ -14,7 +14,7 @@ niri-shell/target
 niri-dock/target
 niri-panel/target
 niri-launcher/target
-.github
+.github/
 
 # Build / test artifacts
 *.log

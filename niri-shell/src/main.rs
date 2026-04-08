@@ -19,6 +19,8 @@ mod power_ui;
 mod quick_settings_backend;
 mod quick_settings_ui;
 mod screenshot_ui;
+mod settings_backend;
+mod settings_ui;
 mod shell;
 mod state;
 mod sysinfo;
@@ -26,6 +28,16 @@ mod weather;
 
 fn main() {
     env_logger::init();
+
+    // `niri-shell --settings` opens the settings GUI as a standalone window,
+    // bypassing the compositor shell logic entirely.
+    if std::env::args().any(|a| a == "--settings") {
+        if let Err(e) = settings_ui::run() {
+            log::error!("niri-settings: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     // Replace any prior running instance before creating new windows.
     // niri auto-restarts spawn-at-startup processes, so without this we'd
