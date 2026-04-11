@@ -1,22 +1,12 @@
-# Swarm orchestrator artifacts
-plans/
-runs/
-proof/
-.quickfix/
-.context/
-.locks/
-node_modules/
+
+
+# Copilot
+niri-shell/target
+.github
+
+# Build / test artifacts
+*.log
 
 # Copilot Orchestrator temporary files
 .orchestrator/
 .worktrees/
-niri-shell/target
-niri-dock/target
-niri-panel/target
-niri-launcher/target
-.github/
-
-# Build / test artifacts
-*.log
-tarpaulin-report.html
-swarm-orchestrator/
