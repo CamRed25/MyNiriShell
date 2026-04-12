@@ -245,7 +245,7 @@ impl QuickSettingsWindow {
         if has_brightness { root.append(&build_slider_row("☀ Brightness", &brightness_scale)); }
         root.append(&build_slider_row("🔊 Volume", &volume_scale));
         root.append(&gtk4::Separator::new(Orientation::Horizontal));
-        root.append(&build_footer_row(app));
+        root.append(&build_footer_row(app, &window));
 
         window.set_child(Some(&root));
 
@@ -705,13 +705,15 @@ fn build_slider_row(label: &str, scale: &Scale) -> GtkBox {
     row
 }
 
-fn build_footer_row(app: &gtk4::Application) -> GtkBox {
+fn build_footer_row(app: &gtk4::Application, win: &Window) -> GtkBox {
     let row = GtkBox::new(Orientation::Horizontal, 6);
 
     let settings_btn = Button::with_label("⚙ Settings");
     settings_btn.add_css_class("qs-foot-btn");
     settings_btn.set_hexpand(true);
-    settings_btn.connect_clicked(|_| {
+    let win_c = win.clone();
+    settings_btn.connect_clicked(move |_| {
+        win_c.set_visible(false);
         if std::process::Command::new("niri-settings").spawn().is_err() {
             log::warn!("could not launch niri-settings — is it installed in PATH?");
         }
