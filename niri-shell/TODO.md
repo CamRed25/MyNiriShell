@@ -1,9 +1,5 @@
 # TODO
 
-## Settings GUI — remaining sections
-
-- [ ] **Keybindings** — key recorder, action picker per bind (high effort)
-
 ## Backlog
 
 - [ ] **Theme system** — `theme.rs` parses `~/.config/niri-shell/theme.toml` into a typed

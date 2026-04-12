@@ -712,10 +712,8 @@ fn build_footer_row(app: &gtk4::Application) -> GtkBox {
     settings_btn.add_css_class("qs-foot-btn");
     settings_btn.set_hexpand(true);
     settings_btn.connect_clicked(|_| {
-        if let Ok(exe) = std::env::current_exe() {
-            let _ = std::process::Command::new(exe).arg("--settings").spawn();
-        } else {
-            log::warn!("could not determine current exe path to launch settings");
+        if std::process::Command::new("niri-settings").spawn().is_err() {
+            log::warn!("could not launch niri-settings — is it installed in PATH?");
         }
     });
 
